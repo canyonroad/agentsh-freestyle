@@ -1,5 +1,5 @@
 # agentsh server configuration for Freestyle VM sandbox
-# Extends default config with settings optimized for E2B environment
+# Extends default config with settings optimized for Freestyle VM environment
 
 server:
   http:
@@ -33,7 +33,7 @@ audit:
 
 sandbox:
   enabled: true
-  allow_degraded: true  # Allow running in E2B without all features
+  allow_degraded: true  # Allow running without all features
 
   limits:
     max_memory_mb: 4096
@@ -41,7 +41,7 @@ sandbox:
     max_processes: 256
 
   # FUSE filesystem for file operation interception
-  # Detected as available in E2B
+  # Detected as available in Freestyle VMs
   fuse:
     enabled: true
     deferred: true
@@ -55,7 +55,7 @@ sandbox:
     intercept_mode: "all"
     proxy_listen_addr: "127.0.0.1:0"
 
-  # Cgroups v2 detected as available in E2B
+  # Cgroups v2 detected as available in Freestyle VMs
   cgroups:
     enabled: true
 
@@ -63,7 +63,7 @@ sandbox:
   seccomp:
     enabled: true
     file_monitor:
-      enabled: false  # E2B lacks Yama PR_SET_PTRACER support; ProcessVMReadv fails
+      enabled: false  # Lacks Yama PR_SET_PTRACER support; ProcessVMReadv fails
 
   # Unix socket wrapper - seccomp-based unix socket interception
   unix_sockets:

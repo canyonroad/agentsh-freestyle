@@ -96,14 +96,14 @@ file_rules:
   - name: block-infrastructure-internals
     description: Block access to infrastructure binaries and configs
     paths:
-      - "/usr/bin/envd"           # E2B environment daemon
-      - "/usr/bin/socat"          # Used for E2B port forwarding
+      - "/usr/bin/envd"           # Environment daemon
+      - "/usr/bin/socat"          # Used for port forwarding
       - "/etc/systemd/**"         # Systemd configs
       - "/run/systemd/**"         # Systemd runtime
     operations:
       - "*"
     decision: deny
-    message: "Access to E2B/system infrastructure blocked: {{.Path}}"
+    message: "Access to system infrastructure blocked: {{.Path}}"
 
   # ---------------------------------------------------------------------------
   # System paths - minimal read-only
@@ -367,9 +367,9 @@ network_rules:
   - name: block-infrastructure-internal
     description: Block internal infrastructure services
     cidrs:
-      - "192.0.2.0/24"      # E2B events service (TEST-NET-1 range)
+      - "192.0.2.0/24"      # Internal events service (TEST-NET-1 range)
     decision: deny
-    message: "Access to E2B internal services blocked"
+    message: "Access to internal services blocked"
 
   # ---------------------------------------------------------------------------
   # Block malicious/untrusted domains
@@ -529,8 +529,8 @@ command_rules:
   - name: block-infrastructure-interference
     description: Block commands that could interfere with sandbox infrastructure
     commands:
-      - socat           # Used by E2B for port forwarding
-      - envd            # E2B environment daemon
+      - socat           # Used for port forwarding
+      - envd            # Environment daemon
       - iptables        # Network rules manipulation
       - ip6tables
       - nft             # nftables
@@ -540,12 +540,12 @@ command_rules:
     message: "Command blocked - could interfere with sandbox infrastructure"
 
   # ---------------------------------------------------------------------------
-  # Allow all other commands (E2B needs general shell access)
+  # Allow all other commands (sandbox needs general shell access)
   # Security is enforced via file_rules and network_rules
   # ---------------------------------------------------------------------------
 
   - name: allow-other-commands
-    description: Allow remaining commands for E2B compatibility
+    description: Allow remaining commands for sandbox compatibility
     commands:
       - "*"
     decision: allow
