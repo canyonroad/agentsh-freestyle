@@ -17,9 +17,12 @@
     "demo:fuse": "tsx src/demo-fuse-protection.ts"
   },
   "dependencies": {
-    "freestyle-sandboxes": "latest",
     "dotenv": "^17.2.3",
+    "freestyle-sandboxes": "latest",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2"
   }
 }
