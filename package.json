@@ -1,0 +1,25 @@
+{
+  "name": "agentsh-freestyle",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx src/test-template.ts",
+    "build-snapshot": "tsx src/build-snapshot.ts",
+    "demo:blocking": "tsx src/demo-blocking.ts",
+    "demo:audit": "tsx src/demo-audit.ts",
+    "demo:network": "tsx src/demo-network.ts",
+    "demo:quarantine": "tsx src/demo-quarantine.ts",
+    "demo:env": "tsx src/demo-env-filtering.ts",
+    "demo:detect": "tsx src/demo-detect.ts",
+    "demo:attack": "tsx src/demo-attack-sim.ts",
+    "demo:resources": "tsx src/demo-resource-limits.ts",
+    "demo:multi-context": "tsx src/demo-multi-context.ts",
+    "demo:fuse": "tsx src/demo-fuse-protection.ts"
+  },
+  "dependencies": {
+    "freestyle-sandboxes": "latest",
+    "dotenv": "^17.2.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
