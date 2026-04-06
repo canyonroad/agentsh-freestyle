@@ -12,15 +12,33 @@ async function main() {
   try {
     await agentsh.waitReady()
 
-    // Helper function for formatted output
+    // Helper for shell commands (allowed commands, diagnostics, filesystem tests)
     async function run(description: string, command: string): Promise<boolean> {
       console.log(`\n--- ${description} ---`)
       const r = await agentsh.exec(command)
       if (r.blocked) {
-        console.log(`\u2717 BLOCKED (exit: 126)`)
+        const ruleInfo = r.rule ? ` [${r.rule}]` : ''
+        console.log(`\u2717 BLOCKED${ruleInfo}`)
         return false
       } else if (r.exitCode === 0) {
-        console.log(`\u2713 ALLOWED (exit: 0)`)
+        console.log(`\u2713 ALLOWED`)
+        return true
+      } else {
+        console.log(`\u2717 DENIED (exit: ${r.exitCode})`)
+        return false
+      }
+    }
+
+    // Helper for direct API calls (command policy enforcement tests)
+    async function runDirect(description: string, command: string, args: string[] = []): Promise<boolean> {
+      console.log(`\n--- ${description} ---`)
+      const r = await agentsh.execDirect(command, args)
+      if (r.blocked) {
+        const ruleInfo = r.rule ? ` [${r.rule}]` : ''
+        console.log(`\u2717 BLOCKED${ruleInfo}`)
+        return false
+      } else if (r.exitCode === 0) {
+        console.log(`\u2713 ALLOWED`)
         return true
       } else {
         console.log(`\u2717 DENIED (exit: ${r.exitCode})`)
@@ -51,62 +69,64 @@ async function main() {
     await run('FUSE mounted', 'mount | grep agentsh || echo "FUSE NOT MOUNTED (deferred until first exec)"')
     await run('BASH_ENV active', 'echo $BASH_ENV')
     await run('kill builtin disabled', 'type kill 2>&1')
-    await run('Read system binary (stat)', 'ls -la /usr/bin/ls')
+    await run('Read system binary (stat)', 'stat /usr/bin/ls')
 
     // Section 3: Privilege Escalation (blocked)
     printSection('3. BLOCKED: Privilege Escalation')
-    await run('sudo whoami', 'sudo whoami')
-    await run('su -', 'su - 2>&1')
-    await run('chroot /', 'chroot / 2>&1')
+    await runDirect('sudo whoami', 'sudo', ['whoami'])
+    await runDirect('su -', 'su', ['-'])
+    await runDirect('chroot /', 'chroot', ['/'])
 
     // Section 4: Network Tools (blocked)
     printSection('4. BLOCKED: Network Tools')
-    await run('ssh localhost', 'ssh localhost 2>&1')
-    await run('nc -h', 'nc -h 2>&1')
-    await run('netcat -h', 'netcat -h 2>&1')
+    await runDirect('ssh localhost', 'ssh', ['localhost'])
+    await runDirect('nc -h', 'nc', ['-h'])
+    await runDirect('netcat -h', 'netcat', ['-h'])
 
     // Section 5: System Commands (blocked)
     printSection('5. BLOCKED: System Commands')
-    await run('kill -9 1', 'kill -9 1 2>&1')
-    await run('shutdown now', 'shutdown now 2>&1')
-    await run('systemctl status', 'systemctl status 2>&1')
+    await runDirect('kill -9 1', 'kill', ['-9', '1'])
+    await runDirect('shutdown now', 'shutdown', ['now'])
+    await runDirect('systemctl status', 'systemctl', ['status'])
 
     // Section 6: Recursive Delete (blocked)
     printSection('6. BLOCKED: Recursive Delete')
     await agentsh.exec('mkdir -p /tmp/test && touch /tmp/test/file.txt')
-    await run('rm -rf /tmp/test', 'rm -rf /tmp/test 2>&1')
-    await run('rm -r /tmp/test', 'rm -r /tmp/test 2>&1')
-    await run('rm --recursive /tmp/test', 'rm --recursive /tmp/test 2>&1')
+    await runDirect('rm -rf /tmp/test', 'rm', ['-rf', '/tmp/test'])
+    await agentsh.exec('mkdir -p /tmp/test && touch /tmp/test/file.txt')
+    await runDirect('rm -r /tmp/test', 'rm', ['-r', '/tmp/test'])
+    await agentsh.exec('mkdir -p /tmp/test && touch /tmp/test/file.txt')
+    await runDirect('rm --recursive /tmp/test', 'rm', ['--recursive', '/tmp/test'])
 
     // Section 7: Single File Delete (allowed)
     printSection('7. ALLOWED: Single File Delete')
     await agentsh.exec('mkdir -p /tmp/test && touch /tmp/test/file.txt')
-    await run('rm /tmp/test/file.txt (single)', 'rm /tmp/test/file.txt')
+    await runDirect('rm /tmp/test/file.txt (single)', 'rm', ['/tmp/test/file.txt'])
 
     // Section 8: Workspace Access (allowed)
     printSection('8. FILESYSTEM: Workspace Access (allowed)')
-    await run('Write to workspace', "python3 -c \"open('/home/user/test-fs.txt','w').write('hello\\n')\"")
-    await run('Read from workspace', 'cat /home/user/test-fs.txt')
-    await run('List workspace', 'ls /home/user/test-fs.txt')
+    await runDirect('Write to workspace', 'python3', ['-c', "open('/home/user/test-fs.txt','w').write('hello\\n')"])
+    await runDirect('Read from workspace', 'cat', ['/home/user/test-fs.txt'])
+    await runDirect('List workspace', 'ls', ['/home/user/test-fs.txt'])
 
     // Section 9: Blocked Paths
     printSection('9. FILESYSTEM: Blocked paths')
-    await run('Read /proc/1/environ', 'cat /proc/1/environ 2>&1')
-    await run('Read /sys/kernel/hostname', 'cat /sys/kernel/hostname 2>&1')
-    await run('Write to /etc/passwd', "python3 -c \"open('/etc/passwd','a').write('pwned\\n')\" 2>&1")
-    await run('Write outside workspace', "python3 -c \"open('/var/escape.txt','w').write('escape\\n')\" 2>&1")
+    await runDirect('Read /proc/1/environ', 'cat', ['/proc/1/environ'])
+    await runDirect('Read /sys/kernel/hostname', 'cat', ['/sys/kernel/hostname'])
+    await runDirect('Write to /etc/passwd', 'python3', ['-c', "open('/etc/passwd','a').write('pwned\\n')"])
+    await runDirect('Write outside workspace', 'python3', ['-c', "open('/var/escape.txt','w').write('escape\\n')"])
 
     // Section 10: Credential Access (blocked)
     printSection('10. FILESYSTEM: Credential access (blocked/approve)')
-    await run('Read ~/.ssh/id_rsa', 'cat /home/user/.ssh/id_rsa 2>&1')
-    await run('Read ~/.aws/credentials', 'cat /home/user/.aws/credentials 2>&1')
-    await run('Read .env file', 'cat /home/user/.env 2>&1')
+    await runDirect('Read ~/.ssh/id_rsa', 'cat', ['/home/user/.ssh/id_rsa'])
+    await runDirect('Read ~/.aws/credentials', 'cat', ['/home/user/.aws/credentials'])
+    await runDirect('Read .env file', 'cat', ['/home/user/.env'])
 
     // Section 11: Soft-delete
     printSection('11. FILESYSTEM: Soft-delete in workspace')
-    await run('Create file', "python3 -c \"open('/home/user/soft-del.txt','w').write('important\\n')\"")
-    await run('Delete workspace file (soft-delete)', 'rm /home/user/soft-del.txt 2>&1')
-    await run('Verify original path gone', 'ls /home/user/soft-del.txt 2>&1')
+    await runDirect('Create file', 'python3', ['-c', "open('/home/user/soft-del.txt','w').write('important\\n')"])
+    await runDirect('Delete workspace file (soft-delete)', 'rm', ['/home/user/soft-del.txt'])
+    await runDirect('Verify original path gone', 'ls', ['/home/user/soft-del.txt'])
 
     // Summary
     console.log('\n' + '='.repeat(60))

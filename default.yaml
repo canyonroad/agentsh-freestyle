@@ -152,7 +152,7 @@ file_rules:
   - name: approve-ssh-access
     description: Require approval for SSH key access
     paths:
-      - "${HOME}/.ssh/**"
+      - "/home/user/.ssh/**"
       - "/root/.ssh/**"
     operations:
       - "*"
@@ -163,7 +163,7 @@ file_rules:
   - name: approve-aws-credentials
     description: Require approval for AWS credentials
     paths:
-      - "${HOME}/.aws/**"
+      - "/home/user/.aws/**"
       - "/root/.aws/**"
     operations:
       - "*"
@@ -174,10 +174,10 @@ file_rules:
   - name: approve-cloud-credentials
     description: Require approval for cloud credentials
     paths:
-      - "${HOME}/.gcloud/**"
-      - "${HOME}/.azure/**"
-      - "${HOME}/.config/gcloud/**"
-      - "${HOME}/.kube/**"
+      - "/home/user/.gcloud/**"
+      - "/home/user/.azure/**"
+      - "/home/user/.config/gcloud/**"
+      - "/home/user/.kube/**"
     operations:
       - "*"
     decision: approve
@@ -198,7 +198,7 @@ file_rules:
   - name: approve-git-credentials
     description: Require approval for git credentials
     paths:
-      - "${HOME}/.git-credentials"
+      - "/home/user/.git-credentials"
       - "**/.netrc"
     operations:
       - "*"
@@ -213,9 +213,9 @@ file_rules:
   - name: allow-cache-read
     description: Read-only cache access
     paths:
-      - "${HOME}/.npm/**"
-      - "${HOME}/.cache/**"
-      - "${HOME}/.cargo/**"
+      - "/home/user/.npm/**"
+      - "/home/user/.cache/**"
+      - "/home/user/.cargo/**"
       - "/root/.npm/**"
       - "/root/.cache/**"
       - "/root/.cargo/**"

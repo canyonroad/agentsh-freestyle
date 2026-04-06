@@ -10,9 +10,14 @@ const KNOWN_CAPABILITIES = [
   'ebpf',
   'fuse',
   'landlock',
+  'landlock_abi',
+  'landlock_network',
   'cgroups_v2',
   'pid_namespace',
-  'user_namespace',
+  'ptrace',
+  'capabilities_drop',
+  'file_enforcement',
+  'fuse_mount_method',
 ]
 
 function parseCapabilities(output: string): Map<string, boolean> {
@@ -21,16 +26,19 @@ function parseCapabilities(output: string): Map<string, boolean> {
   let inCapabilities = false
 
   for (const line of lines) {
-    if (/CAPABILITIES/i.test(line)) {
+    if (/^CAPABILITIES/i.test(line)) {
       inCapabilities = true
       continue
     }
+    if (inCapabilities && /^[A-Z]/.test(line)) {
+      inCapabilities = false
+      continue
+    }
     if (inCapabilities) {
-      // Lines like "  seccomp_basic  ✓" or "  landlock  ✗"
-      const match = line.match(/^\s+(\w+)\s+(✓|✗|[✔✘x])/)
+      const match = line.match(/^\s+(\w+)\s+(✓|-)\s*(.*)/)
       if (match) {
         const name = match[1]
-        const available = match[2] === '✓' || match[2] === '✔'
+        const available = match[2] === '✓'
         capabilities.set(name, available)
       }
     }

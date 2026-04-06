@@ -4,13 +4,15 @@ import { resolve } from 'path'
 
 const AGENTSH_VERSION = 'v0.16.9'
 const AGENTSH_REPO = 'erans/agentsh'
-const HEALTH_URL = 'http://127.0.0.1:18080/health'
+const AGENTSH_API = 'http://127.0.0.1:18080'
+const HEALTH_URL = `${AGENTSH_API}/health`
 
 export interface ExecResult {
   stdout: string
   stderr: string
   exitCode: number
   blocked: boolean
+  rule?: string
 }
 
 export interface TestExpectation {
@@ -21,35 +23,106 @@ export interface TestExpectation {
 }
 
 export class VmAgentshInstance extends VmWithInstance {
+  private sessionId: string | null = null
+  private reqCounter = 0
+
   async waitReady(retries = 30, intervalMs = 1000): Promise<void> {
     for (let i = 0; i < retries; i++) {
       try {
         const r = await this.vm.exec({ command: `curl -sf ${HEALTH_URL}`, timeoutMs: 5000 })
-        if ((r.stdout ?? '').trim() === 'ok') return
+        if ((r.stdout ?? '').trim() !== 'ok') throw new Error('server not ready')
+        // Verify shell shim is installed (bash.real must exist)
+        const s = await this.vm.exec({ command: 'stat /bin/bash.real >/dev/null 2>&1 && echo ok', timeoutMs: 5000 })
+        if ((s.stdout ?? '').trim() === 'ok') return
       } catch {
         // ignore — server not ready yet
       }
       await new Promise(res => setTimeout(res, intervalMs))
     }
-    // Try to get server logs for diagnostics
     let logs = ''
     try {
       const r = await this.vm.exec({ command: 'tail -20 /var/log/agentsh/server.log 2>/dev/null || echo "no logs"', timeoutMs: 5000 })
       logs = r.stdout ?? ''
-    } catch {
-      // ignore
-    }
+    } catch {}
     throw new Error(`agentsh server not ready after ${retries * intervalMs / 1000}s. Logs:\n${logs}`)
   }
 
+  private async ensureSession(): Promise<string> {
+    if (this.sessionId) return this.sessionId
+    const r = await this.vm.exec({
+      command: `curl -s -X POST ${AGENTSH_API}/api/v1/sessions -H "Content-Type: application/json" -d '{"workspace":"/home/user"}'`,
+      timeoutMs: 10000
+    })
+    const data = JSON.parse(r.stdout ?? '')
+    if (data.error) throw new Error(`Session creation failed: ${data.error}`)
+    this.sessionId = data.id
+    return data.id
+  }
+
+  /** Shell command execution — wraps in bash.real for full shell support.
+   *  Sub-commands within bash are NOT subject to command_rules. */
   async exec(command: string, timeoutMs = 30000): Promise<ExecResult> {
-    const r = await this.vm.exec({ command, timeoutMs })
-    return {
-      stdout: r.stdout ?? '',
-      stderr: r.stderr ?? '',
-      exitCode: r.statusCode ?? -1,
-      blocked: r.statusCode === 126,
+    return this.sessionExec({ command: '/bin/bash.real', args: ['-c', command] }, timeoutMs)
+  }
+
+  /** Direct command execution — command_rules are fully evaluated.
+   *  Use for testing command policy enforcement. */
+  async execDirect(command: string, args: string[] = [], timeoutMs = 30000): Promise<ExecResult> {
+    return this.sessionExec({ command, args }, timeoutMs)
+  }
+
+  private async sessionExec(req: { command: string, args: string[] }, timeoutMs: number): Promise<ExecResult> {
+    const sessionId = await this.ensureSession()
+    const body = JSON.stringify(req)
+    const reqFile = `/tmp/exec-req-${++this.reqCounter}.json`
+    await this.vm.exec({ command: `cat > ${reqFile} << 'JSONEOF'\n${body}\nJSONEOF`, timeoutMs: 5000 })
+
+    const r = await this.vm.exec({
+      command: `curl -s -X POST "${AGENTSH_API}/api/v1/sessions/${sessionId}/exec" -H "Content-Type: application/json" -d @${reqFile} --max-time ${Math.ceil(timeoutMs / 1000)}`,
+      timeoutMs: timeoutMs + 5000
+    })
+
+    const resp = JSON.parse(r.stdout ?? '')
+    const exitCode = resp.result?.exit_code ?? -1
+    const stdout = resp.result?.stdout ?? ''
+    const stderr = resp.result?.stderr ?? ''
+    const errorCode = resp.result?.error?.code
+    const guidanceRule = resp.guidance?.policy_rule
+    const blockedOps = resp.events?.blocked_operations || []
+    const blockedRule = blockedOps[0]?.policy?.rule
+    const rule = guidanceRule || blockedRule || undefined
+    const blocked = !!(guidanceRule || blockedRule) || errorCode === 'E_POLICY_DENIED'
+
+    return { stdout, stderr, exitCode, blocked, rule }
+  }
+
+  private needsShell(command: string): boolean {
+    let unquoted = ''
+    let sq = false, dq = false
+    for (const ch of command) {
+      if (ch === "'" && !dq) { sq = !sq; continue }
+      if (ch === '"' && !sq) { dq = !dq; continue }
+      if (!sq && !dq) unquoted += ch
     }
+    return /[|&;><$`(){}~*?\\]/.test(unquoted)
+  }
+
+  private parseCommand(input: string): { cmd: string, args: string[] } | null {
+    const tokens: string[] = []
+    let cur = ''
+    let sq = false, dq = false
+    for (const ch of input) {
+      if (ch === "'" && !dq) { sq = !sq; continue }
+      if (ch === '"' && !sq) { dq = !dq; continue }
+      if (ch === ' ' && !sq && !dq) {
+        if (cur) { tokens.push(cur); cur = '' }
+      } else {
+        cur += ch
+      }
+    }
+    if (cur) tokens.push(cur)
+    if (!tokens.length || sq || dq) return null
+    return { cmd: tokens[0], args: tokens.slice(1) }
   }
 
   async test(
@@ -92,7 +165,7 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
     const url = `https://github.com/${AGENTSH_REPO}/releases/download/${AGENTSH_VERSION}/${deb}`
 
     return spec
-      .aptDeps('ca-certificates', 'curl', 'jq', 'libseccomp2', 'sudo', 'fuse3')
+      .aptDeps('ca-certificates', 'curl', 'jq', 'libseccomp2', 'sudo', 'fuse3', 'python3', 'file')
       .additionalFiles({
         '/opt/install-agentsh.sh': {
           content: [
@@ -102,7 +175,7 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
             'dpkg -i /tmp/agentsh.deb',
             'rm -f /tmp/agentsh.deb',
             'agentsh --version',
-            'mkdir -p /etc/agentsh/policies /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh',
+            'mkdir -p /etc/agentsh/policies /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh /home/user',
             'chmod 755 /etc/agentsh /etc/agentsh/policies /var/lib/agentsh /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh',
             'echo "root ALL=(ALL) NOPASSWD: /usr/bin/agentsh" >> /etc/sudoers',
             'echo "root ALL=(ALL) NOPASSWD: /bin/chmod 666 /dev/fuse" >> /etc/sudoers',
@@ -131,6 +204,12 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
         '/etc/agentsh/config.yaml': { content: configYaml },
         '/etc/agentsh/policies/default.yaml': { content: defaultYaml },
         '/opt/agentsh-startup.sh': { content: startupSh },
+        '/etc/environment': {
+          content: [
+            'AGENTSH_SERVER=http://127.0.0.1:18080',
+            'AGENTSH_SHIM_FORCE=1',
+          ].join('\n'),
+        },
       })
       .systemdService({
         name: 'agentsh',
