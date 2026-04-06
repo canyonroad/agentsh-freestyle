@@ -24,7 +24,7 @@ export class VmAgentshInstance extends VmWithInstance {
   async waitReady(retries = 30, intervalMs = 1000): Promise<void> {
     for (let i = 0; i < retries; i++) {
       try {
-        const r = await this.vm.exec(`curl -sf ${HEALTH_URL}`)
+        const r = await this.vm.exec({ command: `curl -sf ${HEALTH_URL}`, timeoutMs: 5000 })
         if ((r.stdout ?? '').trim() === 'ok') return
       } catch {
         // ignore — server not ready yet
@@ -34,7 +34,7 @@ export class VmAgentshInstance extends VmWithInstance {
     // Try to get server logs for diagnostics
     let logs = ''
     try {
-      const r = await this.vm.exec('tail -20 /var/log/agentsh/server.log 2>/dev/null || echo "no logs"')
+      const r = await this.vm.exec({ command: 'tail -20 /var/log/agentsh/server.log 2>/dev/null || echo "no logs"', timeoutMs: 5000 })
       logs = r.stdout ?? ''
     } catch {
       // ignore
