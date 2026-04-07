@@ -62,15 +62,26 @@ async function main() {
 
     // 1. Run agentsh detect
     printSection('1. RAW DETECT OUTPUT')
-    const detectResult = await agentsh.exec('agentsh detect 2>&1')
-    console.log(detectResult.stdout)
-    if (detectResult.stderr) {
-      console.log('[stderr]', detectResult.stderr)
+    const detectResult = await agentsh.exec('agentsh detect 2>&1', 30000)
+    let detectOutput = detectResult.stdout
+    if (!detectOutput.trim() && detectResult.stderr) {
+      detectOutput = detectResult.stderr
+    }
+    if (!detectOutput.trim()) {
+      // Try again with explicit path
+      const retry = await agentsh.exec('/usr/bin/agentsh detect 2>&1', 30000)
+      detectOutput = retry.stdout || retry.stderr
+    }
+    if (detectOutput.trim()) {
+      console.log(detectOutput)
+    } else {
+      console.log('  (no output from agentsh detect)')
+      console.log(`  exit: ${detectResult.exitCode}, stderr: ${detectResult.stderr.slice(0, 200)}`)
     }
 
     // 2. Parse and display capability matrix
     printSection('2. CAPABILITY MATRIX')
-    const detected = parseCapabilities(detectResult.stdout)
+    const detected = parseCapabilities(detectOutput)
 
     // Merge detected results with known capabilities list
     const allNames = new Set([...KNOWN_CAPABILITIES, ...detected.keys()])

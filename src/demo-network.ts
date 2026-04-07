@@ -12,7 +12,7 @@ async function main() {
   try {
     await agentsh.waitReady()
 
-    async function run(description: string, command: string): Promise<void> {
+    async function runCurl(description: string, command: string): Promise<void> {
       console.log(`\n--- ${description} ---`)
       const r = await agentsh.exec(command)
       const code = r.stdout.trim()
@@ -25,9 +25,22 @@ async function main() {
       } else if (code === '000') {
         console.log(`\u2717 CONNECTION REFUSED/BLOCKED (HTTP ${code})`)
       } else if (r.exitCode !== 0) {
-        console.log(`\u2717 DENIED (exit: ${r.exitCode}, output: ${r.stdout.slice(0, 100)})`)
+        console.log(`\u2717 DENIED (exit: ${r.exitCode}, output: ${code.slice(0, 80)})`)
       } else {
-        console.log(`? UNKNOWN (HTTP ${code}, exit: ${r.exitCode})`)
+        console.log(`? RESULT: HTTP ${code}, exit: ${r.exitCode}`)
+      }
+    }
+
+    async function runCmd(description: string, command: string): Promise<void> {
+      console.log(`\n--- ${description} ---`)
+      const r = await agentsh.exec(command)
+      const output = r.stdout.trim()
+      if (r.blocked) {
+        console.log(`\u2717 BLOCKED by policy`)
+      } else if (r.exitCode === 0) {
+        console.log(`\u2713 ALLOWED (${output.slice(0, 60)})`)
+      } else {
+        console.log(`\u2717 DENIED (exit: ${r.exitCode}, output: ${output.slice(0, 80)})`)
       }
     }
 
@@ -37,37 +50,32 @@ async function main() {
 
     // 1. Localhost (allowed)
     printSection('1. LOCALHOST (allowed)')
-    await run('curl health endpoint', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/health')
-    await run('curl localhost:18080/health', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" http://localhost:18080/health')
+    await runCurl('curl health endpoint', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/health')
+    await runCurl('curl localhost:18080/health', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" http://localhost:18080/health')
 
     // 2. Cloud Metadata (blocked)
     printSection('2. CLOUD METADATA (blocked)')
-    await run('AWS metadata (169.254.169.254)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://169.254.169.254/latest/meta-data/')
-    await run('GCP metadata (metadata.google.internal)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://metadata.google.internal/')
-    await run('Alibaba metadata (100.100.100.200)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://100.100.100.200/')
+    await runCurl('AWS metadata (169.254.169.254)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://169.254.169.254/latest/meta-data/')
+    await runCurl('GCP metadata (metadata.google.internal)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://metadata.google.internal/')
+    await runCurl('Alibaba metadata (100.100.100.200)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://100.100.100.200/')
 
     // 3. Private Networks (blocked)
     printSection('3. PRIVATE NETWORKS (blocked)')
-    await run('10.0.0.1 (RFC1918)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://10.0.0.1/')
-    await run('172.16.0.1 (RFC1918)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://172.16.0.1/')
-    await run('192.168.1.1 (RFC1918)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://192.168.1.1/')
+    await runCurl('10.0.0.1 (RFC1918)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://10.0.0.1/')
+    await runCurl('172.16.0.1 (RFC1918)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://172.16.0.1/')
+    await runCurl('192.168.1.1 (RFC1918)', 'curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://192.168.1.1/')
 
     // 4. Package Registries (allowed)
     printSection('4. PACKAGE REGISTRIES (allowed)')
-    await run('npm registry', 'curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://registry.npmjs.org/')
-    await run('PyPI', 'curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://pypi.org/')
-    await run('crates.io', 'curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://crates.io/')
+    await runCurl('npm registry', 'curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://registry.npmjs.org/')
+    await runCurl('PyPI', 'curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://pypi.org/')
+    await runCurl('crates.io', 'curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://crates.io/api/v1/crates?per_page=1')
 
     // 5. Unknown/Malicious Domains (blocked/denied)
     printSection('5. UNKNOWN/MALICIOUS DOMAINS (blocked)')
-    await run('evil.com', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://evil.com/')
-    await run('example.com', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://example.com/')
-    await run('httpbin.org', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://httpbin.org/get')
-
-    // 6. wget tests
-    printSection('6. WGET TESTS')
-    await run('wget health (allowed)', 'wget -q -O /dev/null http://127.0.0.1:18080/health && echo ALLOWED || echo DENIED')
-    await run('wget metadata (blocked)', 'wget -q --timeout=3 -O /dev/null http://169.254.169.254/ && echo ALLOWED || echo DENIED')
+    await runCurl('evil.com', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://evil.com/')
+    await runCurl('example.com', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://example.com/')
+    await runCurl('httpbin.org', 'curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://httpbin.org/get')
 
     // Summary
     console.log('\n' + '='.repeat(60))

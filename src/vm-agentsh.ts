@@ -82,7 +82,14 @@ export class VmAgentshInstance extends VmWithInstance {
       timeoutMs: timeoutMs + 5000
     })
 
-    const resp = JSON.parse(r.stdout ?? '')
+    const raw = r.stdout ?? ''
+    let resp: any
+    try {
+      resp = JSON.parse(raw)
+    } catch {
+      return { stdout: '', stderr: `Invalid response: ${raw.slice(0, 200)}`, exitCode: -1, blocked: false }
+    }
+
     const exitCode = resp.result?.exit_code ?? -1
     const stdout = resp.result?.stdout ?? ''
     const stderr = resp.result?.stderr ?? ''
@@ -165,7 +172,7 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
     const url = `https://github.com/${AGENTSH_REPO}/releases/download/${AGENTSH_VERSION}/${deb}`
 
     return spec
-      .aptDeps('ca-certificates', 'curl', 'jq', 'libseccomp2', 'sudo', 'fuse3', 'python3', 'file')
+      .aptDeps('ca-certificates', 'curl', 'jq', 'libseccomp2', 'sudo', 'fuse3', 'python3', 'file', 'sqlite3')
       .additionalFiles({
         '/opt/install-agentsh.sh': {
           content: [

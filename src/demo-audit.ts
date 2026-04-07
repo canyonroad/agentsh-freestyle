@@ -16,96 +16,81 @@ async function main() {
     console.log('DEMONSTRATING AGENTSH AUDIT TRAIL')
     console.log('='.repeat(60))
 
-    // Phase 1: Generate audit events
+    // Phase 1: Generate audit events via direct API (command_rules enforced)
     printSection('Phase 1: Generating audit events')
 
-    const commands = [
-      { desc: 'Allowed: echo', cmd: 'echo audit-test' },
-      { desc: 'Allowed: pwd', cmd: 'pwd' },
-      { desc: 'Allowed: ls', cmd: 'ls /home' },
-      { desc: 'Blocked: sudo', cmd: 'sudo whoami 2>&1' },
-      { desc: 'Blocked: ssh', cmd: 'ssh localhost 2>&1' },
-      { desc: 'Allowed: date', cmd: 'date' },
-      { desc: 'Blocked: kill', cmd: 'kill -9 1 2>&1' },
-      { desc: 'Allowed: cat', cmd: 'cat /etc/hostname' },
-      { desc: 'Blocked: rm -rf', cmd: 'rm -rf /tmp/test 2>&1' },
-      { desc: 'Allowed: python3', cmd: "python3 -c 'print(\"audit-ok\")'" },
+    const directCmds = [
+      { desc: 'Allowed: echo', cmd: 'echo', args: ['audit-test'] },
+      { desc: 'Allowed: ls', cmd: 'ls', args: ['/home'] },
+      { desc: 'Allowed: date', cmd: 'date', args: [] },
+      { desc: 'Allowed: cat', cmd: 'cat', args: ['/etc/hostname'] },
+      { desc: 'Blocked: sudo', cmd: 'sudo', args: ['whoami'] },
+      { desc: 'Blocked: ssh', cmd: 'ssh', args: ['localhost'] },
+      { desc: 'Blocked: kill', cmd: 'kill', args: ['-9', '1'] },
+      { desc: 'Blocked: rm -rf', cmd: 'rm', args: ['-rf', '/tmp/test'] },
     ]
 
-    for (const { desc, cmd } of commands) {
-      const r = await agentsh.exec(cmd)
-      const status = r.blocked ? '\u2717 BLOCKED' : (r.exitCode === 0 ? '\u2713 ALLOWED' : '\u2717 FAILED')
+    for (const { desc, cmd, args } of directCmds) {
+      const r = await agentsh.execDirect(cmd, args)
+      const rule = r.rule ? ` [${r.rule}]` : ''
+      const status = r.blocked ? `\u2717 BLOCKED${rule}` : (r.exitCode === 0 ? '\u2713 ALLOWED' : '\u2717 FAILED')
       console.log(`  ${status}: ${desc}`)
     }
 
     // Small delay for events to be persisted
     await new Promise(r => setTimeout(r, 1000))
 
-    // Phase 2: Query SQLite audit database
+    // Phase 2: Discover database schema and query
     printSection('Phase 2: Querying audit database (SQLite)')
 
     const dbPath = '/var/lib/agentsh/events.db'
+
+    // Show schema
+    const schemaResult = await agentsh.exec(`sqlite3 ${dbPath} ".schema" 2>&1`)
+    if (schemaResult.stdout.trim()) {
+      console.log('  Database schema:')
+      for (const line of schemaResult.stdout.trim().split('\n').slice(0, 10)) {
+        console.log(`    ${line}`)
+      }
+    }
+
+    // Get table names
+    const tablesResult = await agentsh.exec(`sqlite3 ${dbPath} ".tables" 2>&1`)
+    console.log(`\n  Tables: ${tablesResult.stdout.trim()}`)
 
     // Count total events
     const countResult = await agentsh.exec(`sqlite3 ${dbPath} "SELECT COUNT(*) FROM events" 2>&1`)
     console.log(`  Total audit events: ${countResult.stdout.trim()}`)
 
-    // Show recent events
+    // Show recent events using generic ORDER BY rowid
     const recentResult = await agentsh.exec(
-      `sqlite3 -json ${dbPath} "SELECT * FROM events ORDER BY created_at DESC LIMIT 10" 2>&1`
+      `sqlite3 -header -column ${dbPath} "SELECT * FROM events ORDER BY rowid DESC LIMIT 10" 2>&1`
     )
     if (recentResult.exitCode === 0 && recentResult.stdout.trim()) {
-      try {
-        const events = JSON.parse(recentResult.stdout)
-        console.log(`\n  Recent events (last 10):`)
-        for (const event of events) {
-          const time = event.created_at || event.timestamp || 'unknown'
-          const action = event.action || event.type || 'unknown'
-          const command = event.command || event.path || event.details || ''
-          const decision = event.decision || event.result || ''
-          console.log(`    [${time}] ${action}: ${command} -> ${decision}`)
-        }
-      } catch {
-        console.log(`  Raw output: ${recentResult.stdout.slice(0, 500)}`)
+      console.log(`\n  Recent events (last 10):`)
+      for (const line of recentResult.stdout.trim().split('\n').slice(0, 15)) {
+        console.log(`    ${line.slice(0, 120)}`)
       }
     } else {
-      console.log(`  SQLite query output: ${recentResult.stdout.slice(0, 500)}`)
-      console.log(`  (Note: SQLite output format may vary based on agentsh schema)`)
-    }
-
-    // Show blocked events specifically
-    const blockedResult = await agentsh.exec(
-      `sqlite3 -json ${dbPath} "SELECT * FROM events WHERE decision='deny' OR decision='block' ORDER BY created_at DESC LIMIT 5" 2>&1`
-    )
-    if (blockedResult.exitCode === 0 && blockedResult.stdout.trim()) {
-      console.log(`\n  Blocked events:`)
-      try {
-        const events = JSON.parse(blockedResult.stdout)
-        for (const event of events) {
-          const rule = event.rule || event.policy_rule || ''
-          const command = event.command || event.path || ''
-          console.log(`    \u2717 ${command} (rule: ${rule})`)
-        }
-      } catch {
-        console.log(`  ${blockedResult.stdout.slice(0, 300)}`)
-      }
+      console.log(`  Query result: ${recentResult.stdout.slice(0, 300)}`)
     }
 
     // Phase 3: Query via agentsh CLI
     printSection('Phase 3: Querying via agentsh CLI')
 
-    const eventsResult = await agentsh.exec('agentsh events 2>&1')
-    if (eventsResult.exitCode === 0) {
-      const lines = eventsResult.stdout.split('\n').slice(0, 15)
+    const queryResult = await agentsh.exec('agentsh events query --direct-db --limit 10 2>&1')
+    if (queryResult.exitCode === 0 && queryResult.stdout.trim()) {
       console.log('  Recent events via CLI:')
-      for (const line of lines) {
-        if (line.trim()) console.log(`    ${line}`)
-      }
-      if (eventsResult.stdout.split('\n').length > 15) {
-        console.log('    ... (truncated)')
+      for (const line of queryResult.stdout.trim().split('\n').slice(0, 15)) {
+        if (line.trim()) console.log(`    ${line.slice(0, 120)}`)
       }
     } else {
-      console.log(`  agentsh events: ${eventsResult.stdout.slice(0, 300)}`)
+      // Fallback to basic help
+      const helpResult = await agentsh.exec('agentsh events query --help 2>&1')
+      console.log('  agentsh events query usage:')
+      for (const line of helpResult.stdout.trim().split('\n').slice(0, 10)) {
+        if (line.trim()) console.log(`    ${line}`)
+      }
     }
 
     // Summary
@@ -119,9 +104,8 @@ Audit trail capabilities:
 \u2713 Events include: timestamp, command, decision, policy rule
 \u2713 Blocked events tracked with specific rule that triggered
 \u2713 Queryable via sqlite3 CLI for custom analysis
-\u2713 Queryable via agentsh events CLI for quick review
+\u2713 Queryable via agentsh events CLI
 \u2713 Database at: ${dbPath}
-\u2713 Retention: 90 days (configured in config.yaml)
 `)
 
   } catch (error) {
