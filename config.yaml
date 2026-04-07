@@ -41,7 +41,8 @@ sandbox:
     max_processes: 256
 
   # FUSE filesystem for file operation interception
-  # Detected as available in Freestyle VMs
+  # Covers workspace paths only (per-session mount at workspace-mnt)
+  # System-path file_rules require Landlock (not available in Freestyle kernel)
   fuse:
     enabled: true
     deferred: true
@@ -63,7 +64,7 @@ sandbox:
   seccomp:
     enabled: true
     file_monitor:
-      enabled: false  # Lacks Yama PR_SET_PTRACER support; ProcessVMReadv fails
+      enabled: false  # Requires Yama (not in kernel) for ProcessVMReadv; conflicts with FUSE when enabled
 
   # Unix socket wrapper - seccomp-based unix socket interception
   unix_sockets:

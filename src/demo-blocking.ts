@@ -109,15 +109,16 @@ async function main() {
     await runDirect('Read from workspace', 'cat', ['/home/user/test-fs.txt'])
     await runDirect('List workspace', 'ls', ['/home/user/test-fs.txt'])
 
-    // Section 9: Blocked Paths
-    printSection('9. FILESYSTEM: Blocked paths')
-    await runDirect('Read /proc/1/environ', 'cat', ['/proc/1/environ'])
+    // Section 9: System paths (FUSE covers workspace only; Landlock not available)
+    printSection('9. FILESYSTEM: System path access')
+    console.log('(Note: file_rules for system paths require Landlock, not available on this kernel)')
+    console.log('(FUSE intercepts workspace paths; system paths protected by OS-level perms only)')
+    await runDirect('Read /etc/hosts (allowed)', 'cat', ['/etc/hosts'])
     await runDirect('Read /sys/kernel/hostname', 'cat', ['/sys/kernel/hostname'])
-    await runDirect('Write to /etc/passwd', 'python3', ['-c', "open('/etc/passwd','a').write('pwned\\n')"])
-    await runDirect('Write outside workspace', 'python3', ['-c', "open('/var/escape.txt','w').write('escape\\n')"])
 
-    // Section 10: Credential Access (blocked)
-    printSection('10. FILESYSTEM: Credential access (blocked/approve)')
+    // Section 10: Credential Access (file doesn't exist → error)
+    printSection('10. FILESYSTEM: Credential access')
+    console.log('(Approve-required paths — files do not exist, so access fails)')
     await runDirect('Read ~/.ssh/id_rsa', 'cat', ['/home/user/.ssh/id_rsa'])
     await runDirect('Read ~/.aws/credentials', 'cat', ['/home/user/.aws/credentials'])
     await runDirect('Read .env file', 'cat', ['/home/user/.env'])
@@ -133,29 +134,26 @@ async function main() {
     console.log('SUMMARY')
     console.log('='.repeat(60))
     console.log(`
-agentsh policy enforcement in action:
+agentsh policy enforcement on Freestyle VM (80/100 protection score):
 
-COMMAND BLOCKING:
+COMMAND BLOCKING (via session API command_rules):
   \u2717 sudo, su, chroot    \u2192 block-shell-escape
   \u2717 ssh, nc, netcat     \u2192 block-network-tools
   \u2717 kill, shutdown      \u2192 block-system-commands
   \u2717 rm -r, rm -rf       \u2192 block-rm-recursive
 
-FILESYSTEM BLOCKING:
-  \u2717 /proc/**            \u2192 deny-proc-sys
-  \u2717 /etc (write)        \u2192 default-deny-files
-  \u2717 ~/.ssh/**           \u2192 approve-ssh-access (blocked unattended)
-  \u2717 ~/.aws/**           \u2192 approve-aws-credentials (blocked unattended)
-
-FILESYSTEM ALLOWED:
+FILESYSTEM (via FUSE workspace overlay):
   \u2713 Workspace read/write \u2192 allow-workspace-read/write
   \u2713 Workspace delete     \u2192 soft-delete-workspace (quarantined)
   \u2713 /tmp/**              \u2192 allow-tmp
 
-COMMANDS ALLOWED:
-  \u2713 echo, pwd, ls, date \u2192 Standard commands
-  \u2713 python3, git        \u2192 Development tools
-  \u2713 rm (single file)    \u2192 Non-recursive delete
+KERNEL CAPABILITIES:
+  \u2713 seccomp-execve       \u2192 command interception
+  \u2713 FUSE                 \u2192 workspace file interception
+  \u2713 cgroups-v2           \u2192 resource limits
+  \u2713 capability-drop      \u2192 privilege reduction
+  \u2717 Landlock             \u2192 not in kernel (would add full filesystem policy)
+  \u2717 eBPF                 \u2192 needs CAP_BPF (would add network monitoring)
 `)
 
   } catch (error) {
