@@ -14,7 +14,10 @@
     "demo:attack": "tsx src/demo-attack-sim.ts",
     "demo:resources": "tsx src/demo-resource-limits.ts",
     "demo:multi-context": "tsx src/demo-multi-context.ts",
-    "demo:fuse": "tsx src/demo-fuse-protection.ts"
+    "demo:fuse": "tsx src/demo-fuse-protection.ts",
+    "diag:kernel": "tsx src/diag-kernel.ts",
+    "diag:kernel:bare": "tsx src/diag-kernel.ts bare",
+    "diag:kernel:agentsh": "tsx src/diag-kernel.ts agentsh"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

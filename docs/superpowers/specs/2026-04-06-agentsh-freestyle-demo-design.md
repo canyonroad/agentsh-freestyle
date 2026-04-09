@@ -21,8 +21,10 @@ agentsh-freestyle/
 ├── src/
 │   ├── vm-agentsh.ts               # VmAgentsh custom integration class
 │   ├── helpers.ts                  # Shared test helpers (formatting, assertions)
-│   ├── test-template.ts            # Comprehensive test suite (~76 tests)
+│   ├── test-template.ts            # Comprehensive test suite (64 tests)
 │   ├── build-snapshot.ts           # Image baking: creates agentsh snapshot
+│   ├── diag-kernel.ts              # Ground-truth kernel probe (bare vs agentsh VM)
+│   ├── diag-kernel.sh              # Kernel probe shell payload (run via vm.exec)
 │   ├── demo-blocking.ts            # Command/filesystem blocking demo
 │   ├── demo-audit.ts               # Audit trail demo
 │   ├── demo-network.ts             # Network policy demo
@@ -92,8 +94,7 @@ class VmAgentsh extends VmWith<VmAgentshInstance> {
   //   - Copy agentsh-startup.sh → /opt/agentsh-startup.sh
 
   // systemd services:
-  //   - agentsh-server (service): runs agentsh server daemon
-  //   - agentsh-shim (oneshot, after server): installs shell shim + warmup
+  //   - agentsh (service): runs /opt/agentsh-startup.sh (server + shim in one script)
 }
 ```
 
@@ -122,16 +123,23 @@ class VmAgentsh extends VmWith<VmAgentshInstance> {
 
 ### Systemd services
 
-1. `agentsh-server` (service mode): runs `agentsh server` daemon with logging to `/var/log/agentsh/server.log`
-2. `agentsh-shim` (oneshot, after agentsh-server): installs shell shim via `agentsh shim install-shell --root / --shim /usr/bin/agentsh-shell-shim --bash`, warms up with `echo shim warmup ok`
+Single service: `agentsh` (service mode) — runs `/opt/agentsh-startup.sh` which handles server startup, health check, and shim installation in sequence. See startup script section below for details.
 
 ### Startup script (`agentsh-startup.sh`)
 
-- Sets `AGENTSH_SHIM_FORCE=1` env var
-- Sets FUSE device permissions (`chmod 666 /dev/fuse` if available)
-- Starts agentsh server with logging
-- Health check loop on `http://127.0.0.1:18080/health`
-- Shell shim installation and warmup
+Used by the `agentsh-server` systemd service as its `ExecStart` command. It handles everything in sequence rather than splitting across multiple systemd units:
+
+1. Sets FUSE device permissions (`chmod 666 /dev/fuse` if available)
+2. Starts agentsh server in background with logging to `/var/log/agentsh/server.log`
+3. Health check loop on `http://127.0.0.1:18080/health` (waits for server ready)
+4. Installs shell shim (`agentsh shim install-shell --root / --shim /usr/bin/agentsh-shell-shim --bash`)
+5. Warms up shim with `echo shim warmup ok`
+
+Environment variables set via systemd `Environment=`:
+- `AGENTSH_SHIM_FORCE=1`
+- `AGENTSH_SERVER=http://127.0.0.1:18080`
+
+This is a single systemd service (not two separate ones) because the shim install depends on the server being healthy, and running it all in one script is simpler than coordinating two systemd units with health-check dependencies.
 
 ### Image baking (`build-snapshot.ts`)
 
@@ -144,22 +152,26 @@ Alternative approach for faster startup:
 
 ## Test Suite (test-template.ts)
 
-~76 tests across 12 categories:
+64 tests across 14 categories. (Design originally called for ~76 across 12 categories; implementation consolidated some overlaps during the Freestyle port and added two new categories for kernel ground-truth probes.)
 
 | Category | Count | What it validates |
 |---|---|---|
 | Installation | 2 | agentsh binary exists, seccomp support |
-| Server & Config | 5 | Server healthy, process running, policy/config files exist, FUSE enabled |
+| Server & Config | 6 | Server healthy, process running, policy/config files exist, FUSE/seccomp enabled |
 | Shell Shim | 4 | Shim installed, real bash preserved, echo/python through shim |
 | Policy Evaluation | 9 | Static policy-test CLI (sudo denied, echo allowed, workspace write, soft-delete, SSH approval) |
-| Security Diagnostics | 7 | `agentsh detect` — seccomp, cgroups_v2, landlock availability |
-| Command Blocking | 6 | sudo, su, ssh, kill, rm -rf blocked; echo allowed |
+| Security Diagnostics | 4 | `agentsh detect` — seccomp, cgroups_v2, landlock availability |
+| **Kernel capabilities vs detect** *(new, 2026-04-08)* | 6 | Ground-truth kernel probes independent of `agentsh detect`: `CAP_BPF` in server `CapEff`, `#196` ebpf guard, `#197` cgroup base_path workaround active, `/sys/fs/cgroup/agentsh` exists, process cgroup under `/agentsh/`, PID limit enforced |
+| Command Blocking (direct API) | 7 | sudo, su, ssh, kill, rm -rf blocked; echo, ls allowed — uses `execDirect()` so `command_rules` actually evaluate |
 | Network Blocking | 5 | npmjs allowed, metadata blocked, evil.com blocked, private networks blocked |
-| Environment Policy | 5 | Sensitive vars filtered, HOME/PATH present, BASH_ENV set, env enumeration blocked |
-| File I/O | 6 | Workspace writes allowed, /etc writes blocked, symlink escape blocked |
-| Multi-context | 7 | env/xargs/find -exec/python subprocess blocking |
-| FUSE Workspace | 4 | FUSE mounted, soft-delete, file recovery, symlink escape |
-| Credential Blocking | 3 | ~/.ssh, ~/.aws, /proc/1/environ blocked |
+| Environment Policy | 3 | Safe vars present (HOME/PATH), BASH_ENV or AGENTSH vars set |
+| File I/O | 4 | Workspace writes allowed, /tmp writes allowed, Python workspace writes, /etc writes (Landlock gap documented) |
+| Multi-context (documents bypass) | 4 | sudo/env-sudo inside bash.real succeed on root VM — documents the sub-command bypass model |
+| FUSE Workspace & Soft Delete | 4 | File creation, soft-delete, file gone from original, quarantine directory |
+| Credential Path | 3 | ~/.ssh, ~/.aws read fails; /proc/1/environ readable (Landlock gap documented) |
+| Audit | 2 | SQLite db exists, command events recorded |
+
+**Current stability:** runs land at 58–60 passing out of 64. The 4–6 remaining failures are pre-existing session-API timing flakes — different tests fail each run (`agentsh installed`, `server healthy`, `policy file exists`, FUSE soft-delete sequence, occasional `INTERNAL_ERROR`). Not correlated with the 2026-04-08 config/startup changes; the commit `275dfd0` "58/58 passing" claim was a single lucky run. The six new kernel-capability tests pass consistently (6/6 across three runs).
 
 ## Demo Files
 
@@ -276,3 +288,38 @@ Exit code meanings:
 3. **Landlock:** Kernel-level execution restrictions, whitelisted binary paths only
 4. **BASH_ENV:** Disables dangerous bash builtins (kill, enable, ulimit) at shell startup
 5. **Network Proxy:** HTTPS traffic interception via embedded proxy, domain/IP filtering
+
+## Kernel Reality vs agentsh Detect (2026-04-08)
+
+Added after a direct kernel capability probe (`src/diag-kernel.ts` + `src/diag-kernel.sh`) run on a raw Freestyle VM AND on an agentsh-provisioned VM side-by-side. The diag script uses `vm.exec()` directly — it does not touch the agentsh HTTP API — so it can distinguish between "the kernel doesn't have it" and "agentsh can't see it."
+
+### What the kernel actually provides
+
+Verified on kernel `6.1.0-6-freestyle`:
+
+- **BPF**: `CONFIG_BPF_SYSCALL=y`, `CONFIG_BPF_JIT=y`. `bpftool feature probe kernel` reports `bpf() syscall is available` and lists 29+ program types. Raw `syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr))` with a minimal socket-filter program returns `fd=3`. systemd already has 9 BPF progs loaded at boot (`sd_devices`, `sd_fw_egress`, `sd_fw_ingress`).
+- **Capabilities**: the agentsh server process runs with `CapEff=0x1ffffffffff` — every bit set, including `cap_bpf`, `cap_perfmon`, `cap_net_admin`, `cap_sys_admin`. `capsh --decode` confirms.
+- **cgroups v2**: mounted at `/sys/fs/cgroup` with `nsdelegate memory_recursiveprot`. The root `cgroup.subtree_control` delegates `cpuset cpu io memory hugetlb pids rdma misc`. `mkdir /sys/fs/cgroup/<new>` + writing `memory.max`, `pids.max`, `cpu.max` all succeed at the root.
+- **LSMs**: `capability,selinux`. **No Landlock**, no Yama. This remains a genuine kernel-side gap.
+
+### What agentsh detect reports on the same VM
+
+`agentsh detect` (v0.16.9) ran on an agentsh-provisioned VM reports:
+
+- **Network 0/20**: `ebpf - permission denied`. Wrong — the server has `cap_bpf` and `bpf()` works. Forcing `sandbox.network.ebpf.enabled: true` makes the server refuse to start because the same broken detect path runs as a startup gate. Upstream: **canyonroad/agentsh#196**.
+- **Resource Limits 15/15**: scored as enforced, but in the default configuration agentsh places per-command cgroups under `/sys/fs/cgroup/system.slice/freestyle-supervisor.service/agentsh/...` where `cgroup.subtree_control` is EMPTY. memory/pids/cpu files never materialize; limits silently no-op. `demo-resource-limits.ts` confirms that memory/PID/CPU bombs ran with no enforcement before the workaround. Upstream: **canyonroad/agentsh#197**.
+- **Isolation 15/15** (`capability-drop ✓`): the server process still has the full capability set. Either capability-drop only applies to spawned commands (in which case the detect label is misleading about what "active" means on the server) or the drop is a no-op. Upstream: **canyonroad/agentsh#198**.
+
+### Workarounds applied in this repo
+
+1. **`config.yaml`** sets `sandbox.cgroups.base_path: /sys/fs/cgroup/agentsh` — moves per-command cgroups out of the service slice and into a fresh tree where controllers ARE delegated. With this in place, `npm run demo:resources` reports: PID limit fires at 98/150 processes, memory bomb triggers OOM kill, CPU quota active, command timeout enforced. Only `disk_write_bps_max` remains unenforced — the `io` controller is not in the root `cgroup.subtree_control` on this kernel.
+2. **`agentsh-startup.sh`** pre-creates `/sys/fs/cgroup/agentsh` and populates its `cgroup.subtree_control` with `+memory +pids +cpu +io` before starting the server — belt-and-braces in case agentsh doesn't initialize the tree.
+3. **`config.yaml`** leaves `sandbox.network.ebpf.enabled: false` with an inline comment. This is a one-line flip once #196 lands.
+
+### Diagnostic tooling
+
+- `npm run diag:kernel:bare` — spin up a bare Freestyle VM (no agentsh) and probe the kernel directly
+- `npm run diag:kernel:agentsh` — same probe on an agentsh-provisioned VM, then run `agentsh detect` and inspect `/proc/<server-pid>/status` for a side-by-side comparison
+- `npm run diag:kernel` — run both modes
+
+Future investigations into "is it the kernel or is it agentsh?" should start with these scripts before filing further upstream bugs.

@@ -55,10 +55,41 @@ sandbox:
     enabled: true
     intercept_mode: "all"
     proxy_listen_addr: "127.0.0.1:0"
+    # eBPF cgroup/connect hooks for socket-level network enforcement.
+    # The Freestyle kernel (6.1) has BPF enabled and the agentsh server has
+    # CAP_BPF in its effective set — verified with `npm run diag:kernel`, and
+    # loading a minimal BPF_PROG_LOAD via the raw bpf() syscall succeeds.
+    #
+    # BUT: setting `ebpf.enabled: true` here makes agentsh refuse to start.
+    # The same `agentsh detect` path that reports eBPF unavailable (upstream
+    # bug canyonroad/agentsh#196) runs as a hard startup gate — if detect
+    # says "no ebpf" then enabled=true triggers:
+    #     capability check failed
+    #       Feature:     ebpf
+    #       To fix: Set 'sandbox.network.ebpf.enabled: false'
+    # Leaving this `false` until #196 lands. Flipping it to `true` should
+    # be a one-line change once the detect bug is fixed.
+    ebpf:
+      enabled: false
 
-  # Cgroups v2 detected as available in Freestyle VMs
+  # Cgroups v2 — the Freestyle kernel supports v2 and the root cgroup
+  # delegates memory/pids/cpu/io controllers; writes to memory.max / pids.max
+  # / cpu.max all succeed at the cgroupfs root (verified via
+  # `npm run diag:kernel:bare`).
+  #
+  # agentsh v0.16.9 defaults to creating per-command cgroups under its own
+  # process cgroup (the systemd service slice), but on this VM that slice has
+  # an EMPTY `cgroup.subtree_control`, so sub-cgroups created there have no
+  # controller files and resource limits silently no-op (upstream bug:
+  # canyonroad/agentsh#197).
+  #
+  # Override `base_path` to an absolute path at the cgroupfs root, where
+  # controllers ARE delegated. agentsh will create this directory on startup
+  # (agentsh-startup.sh also pre-creates it and populates subtree_control for
+  # belt-and-braces).
   cgroups:
     enabled: true
+    base_path: "/sys/fs/cgroup/agentsh"
 
   # Seccomp - per-command wrapper via agentsh-unixwrap (inherently deferred)
   seccomp:

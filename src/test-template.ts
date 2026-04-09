@@ -174,8 +174,20 @@ async function main() {
     // =================================================================
     printSection('Security Diagnostics')
 
-    const detectOut = (await agentsh.exec('agentsh detect 2>&1')).stdout
-    const capSection = detectOut.substring(detectOut.indexOf('CAPABILITIES'))
+    // agentsh detect's table output can land on either stdout or stderr
+    // depending on how the binary buffers it — read both and fall back.
+    const detectResult = await agentsh.exec('agentsh detect 2>&1')
+    let detectOut = detectResult.stdout
+    if (!detectOut.includes('CAPABILITIES') && detectResult.stderr) {
+      detectOut = detectResult.stderr
+    }
+    if (!detectOut.includes('CAPABILITIES')) {
+      // Final fallback: explicit binary path
+      const retry = await agentsh.exec('/usr/bin/agentsh detect 2>&1')
+      detectOut = retry.stdout.includes('CAPABILITIES') ? retry.stdout : retry.stderr
+    }
+    const capIdx = detectOut.indexOf('CAPABILITIES')
+    const capSection = capIdx >= 0 ? detectOut.substring(capIdx) : ''
     function capAvailable(key: string): boolean {
       const re = new RegExp(`^\\s+${key}\\s+[\u2713]`, 'm')
       return re.test(capSection)
@@ -191,6 +203,94 @@ async function main() {
 
     // Landlock is NOT available on Freestyle kernel — this is expected
     await test('agentsh detect: landlock NOT available (expected on Freestyle)', async () => capUnavailable('landlock'))
+
+    // =================================================================
+    // 5b. KERNEL CAPABILITIES vs DETECT (ground truth probe)
+    //
+    // The tests below establish kernel reality independently of
+    // `agentsh detect`, so we catch cases where detect mis-reports
+    // features that the kernel actually provides.
+    //
+    // Related upstream bugs:
+    //   - canyonroad/agentsh#196 — detect reports ebpf "permission
+    //     denied" even though CAP_BPF is present + bpf() works
+    //   - canyonroad/agentsh#197 — cgroup limits silently no-op when
+    //     parent subtree_control is empty (workaround: base_path)
+    //   - canyonroad/agentsh#198 — capability-drop scored 15/15 while
+    //     server CapEff is full
+    // =================================================================
+    printSection('Kernel capabilities vs detect')
+
+    await test('server process has CAP_BPF in CapEff', async () => {
+      // Probe /proc/<pid>/status for the server. CapEff is a hex bitmap;
+      // cap_bpf is bit 39 = 0x8000000000. The Freestyle kernel keeps the
+      // full set (0x1ffffffffff), so cap_bpf & cap_perfmon are both present.
+      // NOTE: 0x1ffffffffff is 41 bits, beyond awk/gawk strtonum 32-bit
+      // precision — pull the hex string raw and parse with BigInt in JS.
+      const r = await agentsh.exec(
+        `PID=$(pgrep -f 'agentsh server' | head -1); ` +
+        `awk '/^CapEff:/{print $2}' /proc/$PID/status`
+      )
+      const hex = r.stdout.trim()
+      if (!hex) return false
+      const capEff = BigInt('0x' + hex)
+      // bit 39 = CAP_BPF
+      return (capEff & (1n << 39n)) !== 0n
+    })
+
+    await test('agentsh detect STILL reports ebpf unavailable (#196)', async () => {
+      // This is an "expected failure" guard: the test PASSES while the
+      // bug is present. When #196 is fixed upstream, this test will start
+      // FAILING — which is the signal to flip sandbox.network.ebpf.enabled
+      // to true in config.yaml and delete this guard test.
+      return capUnavailable('ebpf')
+    })
+
+    await test('config overrides cgroup base_path (#197 workaround)', async () => {
+      const r = await agentsh.exec(
+        'grep -A2 "^  cgroups:" /etc/agentsh/config.yaml'
+      )
+      return r.stdout.includes('base_path') && r.stdout.includes('/sys/fs/cgroup/agentsh')
+    })
+
+    await test('cgroup dir /sys/fs/cgroup/agentsh exists', async () => {
+      const r = await agentsh.exec('test -d /sys/fs/cgroup/agentsh && echo yes')
+      return r.stdout.includes('yes')
+    })
+
+    await test('process cgroup is under /agentsh (override effective)', async () => {
+      // Confirms the base_path knob is being honored — without it, the
+      // path would be /system.slice/freestyle-supervisor.service/...
+      const r = await agentsh.exec('cat /proc/self/cgroup')
+      return /0::\/agentsh\//.test(r.stdout)
+    })
+
+    await test('PID limit enforced (~100 procs, was 0 before #197 workaround)', async () => {
+      // Previously this test was in demo-resource-limits only; it's fast
+      // enough to belong here. Fork 150 children; expect failure before
+      // the 150th because pids.max = 100 from default.yaml.
+      const r = await agentsh.exec(`python3 -c "
+import os, sys
+pids = []
+try:
+    for i in range(150):
+        pid = os.fork()
+        if pid == 0:
+            import time; time.sleep(5); sys.exit(0)
+        pids.append(pid)
+except OSError:
+    pass
+finally:
+    for p in pids:
+        try: os.kill(p, 9)
+        except: pass
+        try: os.waitpid(p, 0)
+        except: pass
+print(len(pids))
+" 2>&1`, 30000)
+      const forked = parseInt(r.stdout.trim().split('\n').pop() ?? '0', 10)
+      return forked > 0 && forked < 150
+    })
 
     // =================================================================
     // 6. COMMAND BLOCKING (via session API — execDirect)

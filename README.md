@@ -21,11 +21,13 @@ npx tsx src/demo-blocking.ts
 | **File Protection** | 25/25 | FUSE (fusermount) | Workspace-scoped virtual filesystem — soft-delete, redirect, audit |
 | **Resource Limits** | 15/15 | cgroups-v2 | CPU, memory, PID, and I/O caps per command |
 | **Isolation** | 15/15 | capability-drop | Drops all Linux capabilities not in the allowlist |
-| **Network** | 0/20 | *(none)* | eBPF needs CAP_BPF; Landlock network needs kernel 6.7+ |
+| **Network** | 0/20 | *(see below)* | eBPF backend blocked by agentsh detect bug, not by the kernel |
+
+> **Kernel reality vs agentsh detect.** `agentsh detect` reports `ebpf - permission denied` on this VM, but a direct kernel probe (`npm run diag:kernel`) shows BPF is fully enabled: the agentsh server has `CAP_BPF` in its effective set, `bpftool feature probe` lists 29+ eBPF program types, and a raw `bpf(BPF_PROG_LOAD, ...)` syscall succeeds. The 0/20 Network score is an upstream detect bug (**canyonroad/agentsh#196**) that also runs as a hard startup gate — setting `sandbox.network.ebpf.enabled: true` makes agentsh refuse to start with "capability check failed". Landlock IS genuinely unavailable (`capability,selinux` LSMs only), but eBPF is a software gap, not a hardware one.
 
 ### What works (verified)
 
-All protections below have been tested end-to-end on Freestyle VMs. The test suite (`npm test`) validates 58 assertions across 13 categories, all passing.
+All protections below have been tested end-to-end on Freestyle VMs. The test suite (`npm test`) validates 64 assertions across 14 categories, including a dedicated "Kernel capabilities vs detect" section that probes `/proc/<server-pid>/status` for `CAP_BPF`, confirms the `#197` cgroup base_path workaround is active, and guards the `#196` eBPF detect bug so the suite starts failing the day it's fixed upstream. Runs land at 58–60 passing — the remaining 4–6 are pre-existing session-API timing flakes (different set each run), not regressions.
 
 **Command blocking (via session API)** — the session API evaluates every command against `command_rules` before execution. Verified blocked commands with named policy rules:
 
@@ -81,21 +83,44 @@ The `demo:multi-context` demo shows this explicitly. For full sub-process enforc
 
 **System paths are unprotected.** FUSE only covers the workspace path (`/home/user`). Without Landlock, reads and writes to `/etc`, `/usr`, `/var`, `/proc` are allowed by OS permissions (process runs as root). This is the source of all 8 "allowed" attacks in the red team simulation.
 
-**cgroup write access denied.** agentsh cannot write to `/sys/fs/cgroup/.../memory.max`, `pids.max`, etc. Per-command resource limits (PID cap, I/O throttle) are configured in policy but not enforced at the cgroup level. VM-level limits from Freestyle still apply as a safety net (memory OOM kill and command timeout are verified working).
+**Resource limits now enforced (with a one-line workaround).** agentsh v0.16.9 defaults to placing per-command cgroups inside its own systemd service cgroup (`/system.slice/freestyle-supervisor.service/...`), but that parent has an empty `cgroup.subtree_control` on this kernel, so the memory/pids/cpu controller files never materialize and limits silently no-op. The workaround, baked into `config.yaml`, is to override the base path to the cgroupfs root:
+
+```yaml
+sandbox:
+  cgroups:
+    enabled: true
+    base_path: "/sys/fs/cgroup/agentsh"
+```
+
+With that in place, `npm run demo:resources` now reports:
+
+| Limit | Default config | With `base_path` override |
+|---|---|---|
+| PID (100) | forked all 150 | **fork limited at 98** |
+| Memory (2 GB) | ran to completion | **OOM-killed** |
+| CPU quota (50%) | unclear | **capped** |
+| Command timeout (5s) | enforced (VM-level) | enforced |
+| Disk I/O (25 MB/s) | 214 MB/s | 214 MB/s — `io` controller not delegated |
+
+Disk I/O throttling remains the one unenforced limit; the `io` controller is not in the root `cgroup.subtree_control` on this kernel, which is unrelated to the base_path fix. Upstream tracking: **canyonroad/agentsh#197** (silent no-op when parent `subtree_control` is empty).
 
 **Quarantine list incomplete.** FUSE soft-delete works (files vanish from original path), but `agentsh trash list` reports "trash empty". The quarantined files are stored in a session-specific path that the CLI doesn't find without session context. Restore functionality is blocked by this.
 
 ### What requires kernel changes (for Freestyle engineers)
 
-The Freestyle kernel (`6.1.0-6-freestyle`) is compiled with `capability,selinux` LSMs only. The following changes would close the gaps above:
+The Freestyle kernel (`6.1.0-6-freestyle`) is compiled with `capability,selinux` LSMs only. **BPF, cgroups v2, and capabilities are fully enabled** (verified with `npm run diag:kernel` — the script bypasses agentsh and probes the kernel directly). The only remaining kernel-side change is Landlock:
 
 | Change | Impact | Requirement | Priority |
 |---|---|---|---|
 | **Landlock** | Closes ALL 8 attack gaps. Enforces file_rules on every filesystem path, not just workspace. Blocks execution of denied binaries in any context (bash, env, xargs, Python). | `CONFIG_SECURITY_LANDLOCK=y` + `landlock` in `lsm=` boot param | **Critical** |
-| **cgroup subtree write** | Enables per-command PID limits, I/O throttle, memory caps | Grant write access to agentsh's cgroup subtree | High |
-| **CAP_BPF** | Enables per-cgroup network monitoring via eBPF (+20 pts) | Grant `CAP_BPF` to agentsh process | Medium |
-| **Yama** | Enables seccomp file_monitor as alternative to FUSE | `CONFIG_SECURITY_YAMA=y` + `yama` in LSM list | Low (Landlock preferred) |
-| **Non-root execution** | OS permissions become a defense layer | Run agent process as unprivileged user | Medium |
+| **Delegate `io` controller** (optional) | Enables per-command disk I/O throttling. Memory/PID/CPU limits already work via the `base_path` workaround. | Add `+io` to root `cgroup.subtree_control` (or expose it per-service) | Low |
+| **Non-root execution** (optional) | OS permissions become a defense layer beyond policy | Run agent process as unprivileged user | Medium |
+
+**What does NOT require kernel changes** (these were in the prior version of this table and have been removed after direct kernel verification):
+
+- ~~`CAP_BPF`~~ — already present. `CapEff=0x1ffffffffff` on the server process includes `cap_bpf`, `cap_perfmon`, `cap_net_admin`, `cap_sys_admin`. The 0/20 Network score is an `agentsh detect` bug (canyonroad/agentsh#196), not a missing capability.
+- ~~`cgroup subtree write`~~ — already works at the cgroupfs root. The appearance of "denied writes" was agentsh placing its cgroups inside the service slice where `subtree_control` is empty (canyonroad/agentsh#197). Fixed in our `config.yaml` with `base_path: /sys/fs/cgroup/agentsh`.
+- ~~`Yama`~~ — only needed if you want seccomp file_monitor as an alternative to FUSE, which has known conflicts with FUSE anyway.
 
 **Landlock is the single highest-impact change.** The kernel is 6.1.0, which supports Landlock ABI v2 — the feature is available, it just needs `CONFIG_SECURITY_LANDLOCK=y` at kernel compile time and `landlock` appended to the `lsm=` boot parameter. This alone would:
 - Block reads to `/etc/shadow`, `/proc/1/environ` (recon)
@@ -119,7 +144,10 @@ The Freestyle kernel (`6.1.0-6-freestyle`) is compiled with `capability,selinux`
 | `npm run demo:resources` | Resource limits — PID bomb, memory bomb, CPU spin, I/O flood, cgroup status |
 | `npm run demo:multi-context` | Command enforcement model — direct API blocking vs bash sub-process behavior |
 | `npm run demo:fuse` | FUSE workspace file protection — read/write, soft-delete, system path gap |
-| `npm test` | Full test suite — 58 tests across 13 categories |
+| `npm test` | Full test suite — 64 tests across 14 categories (incl. kernel-vs-detect ground-truth probes) |
+| `npm run diag:kernel` | Ground-truth kernel probe — runs the same capability checks on a bare Freestyle VM AND an agentsh-provisioned VM side by side, so you can tell "kernel doesn't have it" apart from "agentsh can't see it". Start here before filing upstream bugs. |
+| `npm run diag:kernel:bare` | Bare VM only (no agentsh) |
+| `npm run diag:kernel:agentsh` | agentsh-provisioned VM only, plus `agentsh detect` and server `/proc/<pid>/status` |
 
 ## Architecture
 
@@ -163,9 +191,10 @@ exec("sudo whoami")
 
 | File | Purpose |
 |---|---|
-| `config.yaml` | Server settings — HTTP/gRPC addresses, session limits, FUSE/seccomp/cgroup toggles, audit storage, DLP patterns |
+| `config.yaml` | Server settings — HTTP/gRPC addresses, session limits, FUSE/seccomp/cgroup toggles, audit storage, DLP patterns. Sets `sandbox.cgroups.base_path: /sys/fs/cgroup/agentsh` as a workaround for canyonroad/agentsh#197 and leaves `sandbox.network.ebpf.enabled: false` pending canyonroad/agentsh#196. |
 | `default.yaml` | Security policy (~640 lines) — file rules, network rules, command rules, env policy, resource limits |
-| `agentsh-startup.sh` | Bootstrap — restricts `/dev/fuse`, starts server, installs shell shim, keeps service alive |
+| `agentsh-startup.sh` | Bootstrap — pre-creates `/sys/fs/cgroup/agentsh` with `+memory +pids +cpu +io` in `subtree_control` (cgroup workaround), restricts `/dev/fuse`, starts server, installs shell shim, keeps service alive |
+| `src/diag-kernel.ts`, `src/diag-kernel.sh` | Ground-truth kernel capability probe — runs `cat /proc/*/status`, `bpftool feature probe`, raw `bpf()` and `seccomp()` syscalls, cgroup controller enumeration. Invoked via `npm run diag:kernel[:bare|:agentsh]`. Use before filing upstream bugs to distinguish kernel gaps from agentsh misreporting. |
 
 ## Security Policy (`default.yaml`)
 
@@ -183,4 +212,10 @@ Default-deny posture with explicit allowlists.
 
 ## Related
 
-- [agentsh](https://github.com/erans/agentsh) — the agentsh runtime governance tool
+- [agentsh](https://github.com/canyonroad/agentsh) — the agentsh runtime governance tool
+
+### Upstream issues tracked in this integration
+
+- **canyonroad/agentsh#196** — `agentsh detect` reports `ebpf - permission denied` on kernels where `CAP_BPF` is present and raw `bpf(BPF_PROG_LOAD, ...)` works. The same broken detect path also runs as a hard startup gate, so setting `sandbox.network.ebpf.enabled: true` makes the server refuse to start. Blocks Network score (currently 0/20) until fixed. **No workaround possible.**
+- **canyonroad/agentsh#197** — Resource limits silently no-op when agentsh places per-command cgroups under a parent whose `cgroup.subtree_control` is empty (the default on Freestyle, where agentsh runs under `freestyle-supervisor.service`). **Worked around** by setting `sandbox.cgroups.base_path: /sys/fs/cgroup/agentsh` in `config.yaml` and pre-creating the tree in `agentsh-startup.sh`. PID/memory/CPU now enforce correctly; disk I/O is still unenforced for an unrelated reason (the `io` controller is not delegated at the cgroupfs root on this kernel).
+- **canyonroad/agentsh#198** — Capability-drop scored `15/15` while the server process still has `CapEff = 0x1ffffffffff` (every bit set). Cosmetic scoring bug; does not affect enforcement.

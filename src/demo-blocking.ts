@@ -150,10 +150,13 @@ FILESYSTEM (via FUSE workspace overlay):
 KERNEL CAPABILITIES:
   \u2713 seccomp-execve       \u2192 command interception
   \u2713 FUSE                 \u2192 workspace file interception
-  \u2713 cgroups-v2           \u2192 resource limits
+  \u2713 cgroups-v2           \u2192 resource limits (via base_path override, see #197)
   \u2713 capability-drop      \u2192 privilege reduction
+  \u2713 CAP_BPF (present)    \u2192 server has cap_bpf; raw bpf() works
   \u2717 Landlock             \u2192 not in kernel (would add full filesystem policy)
-  \u2717 eBPF                 \u2192 needs CAP_BPF (would add network monitoring)
+  \u2717 eBPF backend         \u2192 disabled — agentsh detect bug (canyonroad/agentsh#196)
+                             kernel supports it, but agentsh refuses to start
+                             with ebpf.enabled=true. Verify: npm run diag:kernel
 `)
 
   } catch (error) {

@@ -18,11 +18,15 @@ async function main() {
     console.log('DEMONSTRATING AGENTSH RESOURCE LIMITS')
     console.log('='.repeat(60))
     console.log()
-    console.log('Note: Resource limits are configured in default.yaml but')
-    console.log('enforcement depends on cgroup write access. If the agentsh')
-    console.log('process cannot write to /sys/fs/cgroup/*/memory.max etc.,')
-    console.log('limits are logged but not enforced at the cgroup level.')
-    console.log('VM-level limits from Freestyle still apply.')
+    console.log('config.yaml sets sandbox.cgroups.base_path: /sys/fs/cgroup/agentsh')
+    console.log('which places per-command cgroups at the cgroupfs root — where the')
+    console.log('memory/pids/cpu controllers ARE delegated on this Freestyle kernel.')
+    console.log('Without that override, agentsh places them under the service slice,')
+    console.log('whose subtree_control is empty, and limits silently no-op (upstream')
+    console.log('tracking: canyonroad/agentsh#197).')
+    console.log()
+    console.log('Expected: PID/Memory/CPU/Timeout enforced; Disk I/O not (io')
+    console.log('controller is not delegated at the cgroupfs root on this kernel).')
 
     // ---------------------------------------------------------------
     // 1. PID Limit (max 100 processes)
@@ -277,10 +281,16 @@ print(f'Wrote {mb} MB in {elapsed:.1f}s ({mb/elapsed:.1f} MB/s)')
     console.log(`
 Notes:
   - Resource limits are configured in default.yaml (policy)
-  - Enforcement requires cgroup write access for agentsh
-  - If cgroup writes are denied, limits are logged but not enforced
-  - VM-level limits from Freestyle still apply as a safety net
-  - Granting cgroup subtree write access would enable per-command limits
+  - Enforcement requires cgroup controllers to be delegated in the parent
+    cgroup's subtree_control. On this kernel the root cgroup has memory,
+    pids, cpu, and io delegated, but the freestyle-supervisor.service slice
+    (agentsh's default parent) has an EMPTY subtree_control.
+  - config.yaml overrides sandbox.cgroups.base_path to /sys/fs/cgroup/agentsh
+    to work around that. Upstream: canyonroad/agentsh#197
+  - Disk I/O is the one limit still unenforced — the 'io' controller is not
+    in the root cgroup.subtree_control. Run 'npm run diag:kernel:bare' to see
+    the raw controller list. Enforcement would require Freestyle to add 'io'
+    to /sys/fs/cgroup/cgroup.subtree_control at boot.
 `)
 
   } catch (error) {
