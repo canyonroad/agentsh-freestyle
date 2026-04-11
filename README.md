@@ -108,7 +108,17 @@ The test passes by intentionally accepting the gap; if agentsh starts migrating 
 
 `/sys/kernel/btf/vmlinux` is missing on Freestyle's kernel build. cilium/ebpf relies on BTF for CO-RE relocation; without it, agentsh's eBPF programs cannot load. v0.18.0's stricter capability check refuses to start when `sandbox.network.ebpf.enabled: true` is set in this state, so we keep it OFF and let the userspace proxy + Landlock cover the network gate.
 
-For Freestyle engineers: enabling `CONFIG_DEBUG_INFO_BTF=y` in the kernel build would let agentsh's eBPF cgroup/connect hooks load and run.
+**Verified independently** on `6.1.0-7-freestyle` (run `npm run diag:ebpf` to reproduce):
+
+- `/sys/kernel/btf/vmlinux` — `No such file or directory`
+- `/sys/kernel/btf/` — entire directory missing
+- `find / -name 'btf' -type d` — empty
+- `bpftool btf list` — empty (kernel knows about zero BTF objects)
+- Raw `bpf(BPF_BTF_GET_NEXT_ID, ...)` syscall — returns ENOENT
+- `agentsh detect` (v0.18.0) — `ebpf - btf not present (missing /sys/kernel/btf/vmlinux)`
+- Forcing `ebpf.enabled: true` — agentsh server exits with `capability check failed / Feature: ebpf / To fix: ... or upgrade to a kernel that supports this feature`
+
+For Freestyle engineers: enabling `CONFIG_DEBUG_INFO_BTF=y` (and ideally `CONFIG_DEBUG_INFO_BTF_MODULES=y`) in the kernel build would let agentsh's eBPF cgroup/connect hooks load and run.
 
 ### Landlock derivation is base-directory granular
 
@@ -144,6 +154,7 @@ The `demo:multi-context` demo shows this distinction explicitly.
 | `npm run diag:kernel` | Ground-truth kernel probe — bare VM AND agentsh-provisioned VM side by side |
 | `npm run diag:kernel:bare` | Bare VM only (no agentsh) |
 | `npm run diag:kernel:agentsh` | agentsh-provisioned VM only, plus `agentsh detect` |
+| `npm run diag:ebpf` | Focused eBPF/BTF probe — verifies the BTF-missing claim and forces `ebpf.enabled: true` to capture agentsh's actual gate error. Re-run after Freestyle ships a new kernel. |
 
 ## Architecture
 

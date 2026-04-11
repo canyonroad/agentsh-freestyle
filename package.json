@@ -17,7 +17,8 @@
     "demo:fuse": "tsx src/demo-fuse-protection.ts",
     "diag:kernel": "tsx src/diag-kernel.ts",
     "diag:kernel:bare": "tsx src/diag-kernel.ts bare",
-    "diag:kernel:agentsh": "tsx src/diag-kernel.ts agentsh"
+    "diag:kernel:agentsh": "tsx src/diag-kernel.ts agentsh",
+    "diag:ebpf": "tsx src/diag-ebpf.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
