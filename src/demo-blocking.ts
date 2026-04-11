@@ -109,10 +109,10 @@ async function main() {
     await runDirect('Read from workspace', 'cat', ['/home/user/test-fs.txt'])
     await runDirect('List workspace', 'ls', ['/home/user/test-fs.txt'])
 
-    // Section 9: System paths (FUSE covers workspace only; Landlock not available)
+    // Section 9: System paths (Landlock + FUSE policy)
     printSection('9. FILESYSTEM: System path access')
-    console.log('(Note: file_rules for system paths require Landlock, not available on this kernel)')
-    console.log('(FUSE intercepts workspace paths; system paths protected by OS-level perms only)')
+    console.log('(Landlock now in Freestyle kernel — enforces system path policy via unixwrap)')
+    console.log('(FUSE intercepts workspace paths; Landlock locks down everything else)')
     await runDirect('Read /etc/hosts (allowed)', 'cat', ['/etc/hosts'])
     await runDirect('Read /sys/kernel/hostname', 'cat', ['/sys/kernel/hostname'])
 
@@ -134,7 +134,7 @@ async function main() {
     console.log('SUMMARY')
     console.log('='.repeat(60))
     console.log(`
-agentsh policy enforcement on Freestyle VM (80/100 protection score):
+agentsh v0.18.0 policy enforcement on Freestyle VM:
 
 COMMAND BLOCKING (via session API command_rules):
   \u2717 sudo, su, chroot    \u2192 block-shell-escape
@@ -142,21 +142,27 @@ COMMAND BLOCKING (via session API command_rules):
   \u2717 kill, shutdown      \u2192 block-system-commands
   \u2717 rm -r, rm -rf       \u2192 block-rm-recursive
 
-FILESYSTEM (via FUSE workspace overlay):
-  \u2713 Workspace read/write \u2192 allow-workspace-read/write
+FILESYSTEM (via FUSE workspace overlay + Landlock):
+  \u2713 Workspace read/write \u2192 allow-workspace-read/write (FUSE)
   \u2713 Workspace delete     \u2192 soft-delete-workspace (quarantined)
   \u2713 /tmp/**              \u2192 allow-tmp
+  \u2713 /etc write           \u2192 denied by Landlock
+  \u2713 /proc/1/environ      \u2192 denied by Landlock
+  \u2713 ~/.ssh, ~/.aws       \u2192 denied (paths absent + Landlock)
 
-KERNEL CAPABILITIES:
+KERNEL CAPABILITIES (kernel 6.1.0-7-freestyle):
   \u2713 seccomp-execve       \u2192 command interception
   \u2713 FUSE                 \u2192 workspace file interception
-  \u2713 cgroups-v2           \u2192 resource limits (via base_path override, see #197)
+  \u2713 Landlock (ABI v2)    \u2192 system path filesystem policy (NEW since v0.16.x)
   \u2713 capability-drop      \u2192 privilege reduction
-  \u2713 CAP_BPF (present)    \u2192 server has cap_bpf; raw bpf() works
-  \u2717 Landlock             \u2192 not in kernel (would add full filesystem policy)
-  \u2717 eBPF backend         \u2192 disabled — agentsh detect bug (canyonroad/agentsh#196)
-                             kernel supports it, but agentsh refuses to start
-                             with ebpf.enabled=true. Verify: npm run diag:kernel
+  \u2713 cgroups-v2 fallback  \u2192 top-level slice (#202/#214) — slice OK,
+                             but per-cmd resource limits aren't actually
+                             enforced (see test "PID limit ... NOT enforced")
+  \u2717 eBPF                 \u2192 kernel ships without BTF
+                             (CONFIG_DEBUG_INFO_BTF=n) — cilium/ebpf CO-RE
+                             can't load. Network gating runs via the
+                             userspace proxy + Landlock instead.
+  \u2717 Landlock network ABI \u2192 needs kernel 6.7+ (currently 6.1)
 `)
 
   } catch (error) {

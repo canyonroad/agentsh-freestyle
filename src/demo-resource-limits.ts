@@ -18,15 +18,18 @@ async function main() {
     console.log('DEMONSTRATING AGENTSH RESOURCE LIMITS')
     console.log('='.repeat(60))
     console.log()
-    console.log('config.yaml sets sandbox.cgroups.base_path: /sys/fs/cgroup/agentsh')
-    console.log('which places per-command cgroups at the cgroupfs root — where the')
-    console.log('memory/pids/cpu controllers ARE delegated on this Freestyle kernel.')
-    console.log('Without that override, agentsh places them under the service slice,')
-    console.log('whose subtree_control is empty, and limits silently no-op (upstream')
-    console.log('tracking: canyonroad/agentsh#197).')
+    console.log('agentsh v0.18.0 (canyonroad/agentsh#202/#214) auto-detects the')
+    console.log('Freestyle nested-cgroup limitation (#197 — empty subtree_control')
+    console.log('under freestyle-supervisor.service) and falls back to a')
+    console.log('top-level /sys/fs/cgroup/agentsh.slice. The slice IS created')
+    console.log('and per-command sub-cgroups appear, but on Freestyle the')
+    console.log('processes spawned through the session API end up under')
+    console.log('/system.slice/freestyle-supervisor.service rather than the')
+    console.log('per-command cgroup, so most numeric limits silently no-op.')
     console.log()
-    console.log('Expected: PID/Memory/CPU/Timeout enforced; Disk I/O not (io')
-    console.log('controller is not delegated at the cgroupfs root on this kernel).')
+    console.log('Memory and timeout still trip via systemd / agentsh server')
+    console.log('side enforcement, so they appear ENFORCED below — but PID,')
+    console.log('CPU, and disk I/O caps are NOT enforced on Freestyle today.')
 
     // ---------------------------------------------------------------
     // 1. PID Limit (max 100 processes)
@@ -281,16 +284,17 @@ print(f'Wrote {mb} MB in {elapsed:.1f}s ({mb/elapsed:.1f} MB/s)')
     console.log(`
 Notes:
   - Resource limits are configured in default.yaml (policy)
-  - Enforcement requires cgroup controllers to be delegated in the parent
-    cgroup's subtree_control. On this kernel the root cgroup has memory,
-    pids, cpu, and io delegated, but the freestyle-supervisor.service slice
-    (agentsh's default parent) has an EMPTY subtree_control.
-  - config.yaml overrides sandbox.cgroups.base_path to /sys/fs/cgroup/agentsh
-    to work around that. Upstream: canyonroad/agentsh#197
-  - Disk I/O is the one limit still unenforced — the 'io' controller is not
-    in the root cgroup.subtree_control. Run 'npm run diag:kernel:bare' to see
-    the raw controller list. Enforcement would require Freestyle to add 'io'
-    to /sys/fs/cgroup/cgroup.subtree_control at boot.
+  - On Freestyle's nested cgroup setup (kernel 6.1.0-7), agentsh v0.18.0 falls
+    back to a top-level /sys/fs/cgroup/agentsh.slice (auto-detected at startup).
+  - The slice and per-command sub-cgroups exist, but spawned processes end up
+    in /system.slice/freestyle-supervisor.service (where vm.exec children live)
+    instead of being migrated into the per-command cgroup. Manual migration is
+    rejected by the kernel ("no internal process constraint" once subtree_control
+    has controllers).
+  - Net result: PID/CPU/Disk I/O caps are NOT enforced on Freestyle today.
+    Memory limit and command timeout still trip via systemd / agentsh server
+    side enforcement.
+  - Tracking the cgroup migration gap as a v0.18.0 follow-up.
 `)
 
   } catch (error) {

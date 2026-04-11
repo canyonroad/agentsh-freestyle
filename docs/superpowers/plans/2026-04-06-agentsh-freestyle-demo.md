@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status update (2026-04-11):** This document captured the original implementation plan against agentsh **v0.16.9** and a Freestyle kernel without Landlock. The integration has since moved to **agentsh v0.18.0** on **kernel 6.1.0-7-freestyle** which now ships **Landlock**. Code snippets below are preserved as a historical record of the initial build — for the current state see `README.md` and the "v0.18.0 + Landlock Update (2026-04-11)" section in `docs/superpowers/specs/2026-04-06-agentsh-freestyle-demo-design.md`.
+
 **Goal:** Build a comprehensive security demo showcasing agentsh runtime governance within Freestyle VMs, with a custom VmWith integration and 10 standalone demo files.
 
 **Architecture:** Custom `VmAgentsh` integration class handles agentsh installation via VmSpec's `configureSnapshotSpec`/`configureSpec`. All command execution goes through `vm.exec()` with shell shim auto-interception. Each demo file is standalone: creates VM, runs demos, cleans up.

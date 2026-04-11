@@ -91,12 +91,15 @@ async function main() {
     await run('Verify permanently gone', 'test -f /tmp/fuse-test.txt && echo exists || echo gone')
 
     // 5. System paths
-    printSection('5. SYSTEM PATH ACCESS (no FUSE coverage)')
-    console.log('Without Landlock, system paths rely on OS permissions only.\n')
+    printSection('5. SYSTEM PATH ACCESS (Landlock now in kernel)')
+    console.log('Landlock is active on Freestyle kernel 6.1+. agentsh-unixwrap')
+    console.log('applies a Landlock ruleset (auto-derived from policy file_rules)')
+    console.log('to every wrapped command, so writes outside allowed paths fail\n')
+    console.log('with EACCES from the kernel — not from FUSE.\n')
     await run('Read /etc/hostname', 'cat /etc/hostname')
     await run('Read /etc/hosts', 'cat /etc/hosts')
-    await run('Write to /etc (OS perms)', 'echo "hack" > /etc/test_file 2>&1')
-    await run('Write to /usr/bin (OS perms)', 'echo "hack" > /usr/bin/evil 2>&1')
+    await run('Write to /etc (Landlock denies)', 'echo "hack" > /etc/test_file 2>&1')
+    await run('Write to /usr/bin (Landlock denies)', 'echo "hack" > /usr/bin/evil 2>&1')
 
     // Summary
     console.log('\n' + '='.repeat(60))
@@ -117,9 +120,12 @@ FUSE provides workspace-level file interception:
 
   SYSTEM PATHS (/etc, /usr, /var, /proc):
     \u26a0 Not covered by FUSE (workspace-scoped only)
-    \u26a0 Rely on OS-level permissions
-    \u2192 Landlock (CONFIG_SECURITY_LANDLOCK) would extend
-      file_rules enforcement to all filesystem paths
+    \u2713 Landlock ABI v2 enforces base-dir allow/deny on Freestyle's
+      kernel 6.1+ — applied per-command via agentsh-unixwrap.
+    \u26a0 Landlock derivation collapses to base directories, so files
+      under an allowed parent (e.g. /etc/shadow under the /etc allow
+      that /etc/passwd needs) are still readable. Tighten by listing
+      individual files in policy file_rules.
 
   Soft-delete commands:
     agentsh trash list              - list quarantined files

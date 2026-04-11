@@ -134,9 +134,14 @@ async function main() {
     console.log(`  Attacks blocked:   ${blocked} (${blockedPct}%)`)
     console.log(`  Attacks allowed:   ${allowed} (${100 - blockedPct}%)`)
     console.log()
-    console.log('  Note: "allowed" attacks in Phase 1/6 access system paths')
-    console.log('  outside the FUSE workspace. Full filesystem enforcement')
-    console.log('  requires Landlock (CONFIG_SECURITY_LANDLOCK in kernel).')
+    console.log('  Note: "allowed" attacks in Phase 1 access system paths')
+    console.log('  (e.g. /etc/passwd, /etc/shadow). Landlock IS active on')
+    console.log('  Freestyle now (kernel 6.1.0+), but agentsh derives its')
+    console.log('  ruleset from the policy file_rules base directories — so')
+    console.log('  /etc/shadow inherits the /etc allow set up for /etc/passwd,')
+    console.log('  /etc/hosts, etc. To carve out individual files inside an')
+    console.log('  allowed parent dir, agentsh would need a more granular')
+    console.log('  Landlock derivation than its current base-dir extraction.')
     console.log('='.repeat(60))
 
   } catch (error) {

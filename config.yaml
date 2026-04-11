@@ -55,41 +55,25 @@ sandbox:
     enabled: true
     intercept_mode: "all"
     proxy_listen_addr: "127.0.0.1:0"
-    # eBPF cgroup/connect hooks for socket-level network enforcement.
-    # The Freestyle kernel (6.1) has BPF enabled and the agentsh server has
-    # CAP_BPF in its effective set — verified with `npm run diag:kernel`, and
-    # loading a minimal BPF_PROG_LOAD via the raw bpf() syscall succeeds.
-    #
-    # BUT: setting `ebpf.enabled: true` here makes agentsh refuse to start.
-    # The same `agentsh detect` path that reports eBPF unavailable (upstream
-    # bug canyonroad/agentsh#196) runs as a hard startup gate — if detect
-    # says "no ebpf" then enabled=true triggers:
-    #     capability check failed
-    #       Feature:     ebpf
-    #       To fix: Set 'sandbox.network.ebpf.enabled: false'
-    # Leaving this `false` until #196 lands. Flipping it to `true` should
-    # be a one-line change once the detect bug is fixed.
+    # eBPF cgroup/connect hooks. The 4-layer detect bug (#196) was fixed
+    # in v0.18.0 / #199, BUT the Freestyle kernel ships WITHOUT BTF
+    # (/sys/kernel/btf/vmlinux is missing), so cilium/ebpf can't relocate
+    # types and the CO-RE programs fail to load. Until Freestyle ships a
+    # kernel with CONFIG_DEBUG_INFO_BTF=y, network enforcement runs via
+    # the userspace proxy + Landlock instead. agentsh's capability check
+    # now refuses to start when ebpf is asked for but BTF is missing,
+    # so we leave it OFF on Freestyle.
     ebpf:
       enabled: false
 
-  # Cgroups v2 — the Freestyle kernel supports v2 and the root cgroup
-  # delegates memory/pids/cpu/io controllers; writes to memory.max / pids.max
-  # / cpu.max all succeed at the cgroupfs root (verified via
-  # `npm run diag:kernel:bare`).
-  #
-  # agentsh v0.16.9 defaults to creating per-command cgroups under its own
-  # process cgroup (the systemd service slice), but on this VM that slice has
-  # an EMPTY `cgroup.subtree_control`, so sub-cgroups created there have no
-  # controller files and resource limits silently no-op (upstream bug:
-  # canyonroad/agentsh#197).
-  #
-  # Override `base_path` to an absolute path at the cgroupfs root, where
-  # controllers ARE delegated. agentsh will create this directory on startup
-  # (agentsh-startup.sh also pre-creates it and populates subtree_control for
-  # belt-and-braces).
+  # Cgroups v2 — Freestyle places agentsh under
+  # /system.slice/freestyle-supervisor.service/, whose subtree_control is
+  # empty (canyonroad/agentsh#197). v0.18.0 ships #202 / #214: ProbeCgroupsV2
+  # auto-falls back to a top-level /sys/fs/cgroup/agentsh.slice when the
+  # nested cgroup has no delegated controllers. Leaving base_path unset so
+  # the probe picks the right mode automatically — no manual workaround.
   cgroups:
     enabled: true
-    base_path: "/sys/fs/cgroup/agentsh"
 
   # Seccomp - per-command wrapper via agentsh-unixwrap (inherently deferred)
   seccomp:
@@ -101,10 +85,124 @@ sandbox:
   unix_sockets:
     enabled: true
 
-# Security mode - minimal (seccomp wraps per-command, not server-wide)
+# Security mode - landlock: Landlock + FUSE (the kernel now ships with
+# landlock since Freestyle added it). agentsh's auto-detect will pick `full`
+# when seccomp+ebpf+fuse are all up, and `landlock` will then be applied via
+# the unixwrap binary on every wrapped command (independent of mode). Setting
+# `auto` lets agentsh pick the best mode for the detected feature set.
 security:
-  mode: minimal
+  mode: auto
   strict: false
+  warn_degraded: true
+
+# Landlock filesystem + network enforcement (kernel 5.13+, ABI v4 needs 6.7+).
+# Now available on Freestyle. Enabled here so `agentsh-unixwrap` applies the
+# ruleset before exec'ing each wrapped command. The ruleset is auto-derived
+# from the active policy's `file_rules` allow entries (see
+# canyonroad/agentsh#209 — wildcard-op derivation + MAKE_SOCK was fixed in
+# v0.18.0, so `operations: ["*"]` rules now feed paths into the ruleset).
+#
+# We also list explicit allow/deny paths below as defence-in-depth — the
+# derived set covers our policy's allow rules but the extras here pin down
+# essential system paths the kernel/dynamic linker need before the policy
+# loader runs, plus container-escape sockets that should never be reachable.
+landlock:
+  enabled: true
+
+  # Directories where execution is allowed (binary loaders need read+exec)
+  allow_execute:
+    - "/usr/bin"
+    - "/bin"
+    - "/usr/local/bin"
+    - "/usr/sbin"
+    - "/sbin"
+    - "/usr/lib"
+    - "/usr/lib64"
+    - "/lib"
+    - "/lib64"
+    - "/usr/libexec"
+
+  # Directories where reading is allowed (system libs, certs, configs)
+  allow_read:
+    - "/usr"
+    - "/lib"
+    - "/lib64"
+    - "/bin"
+    - "/sbin"
+    - "/etc/ssl"
+    - "/etc/ca-certificates"
+    - "/etc/resolv.conf"
+    - "/etc/hosts"
+    - "/etc/nsswitch.conf"
+    - "/etc/passwd"
+    - "/etc/group"
+    - "/etc/localtime"
+    - "/etc/ld.so.cache"
+    - "/etc/ld.so.conf"
+    - "/etc/ld.so.conf.d"
+    - "/etc/fuse.conf"
+    - "/proc/self"
+    - "/sys/fs/cgroup"
+    - "/dev/null"
+    - "/dev/zero"
+    - "/dev/random"
+    - "/dev/urandom"
+    - "/dev/tty"
+    - "/dev/pts"
+
+  # Directories where writes are allowed beyond the workspace.
+  # Workspace itself is auto-added by agentsh from the session workspace.
+  allow_write:
+    - "/tmp"
+    - "/var/tmp"
+    - "/dev/null"
+    - "/dev/stdout"
+    - "/dev/stderr"
+    - "/dev/pts"
+    - "/proc/self"
+    - "/var/lib/agentsh"
+    - "/var/log/agentsh"
+
+  # Paths explicitly denied. These are excluded from the ruleset; combined
+  # with the deny-by-default model, anything not in allow_* is blocked.
+  deny_paths:
+    - "/etc/shadow"
+    - "/etc/gshadow"
+    - "/etc/sudoers"
+    - "/etc/sudoers.d"
+    - "/etc/profile.d"
+    - "/etc/bash.bashrc"
+    - "/etc/cron.d"
+    - "/etc/cron.daily"
+    - "/etc/cron.hourly"
+    - "/etc/systemd"
+    - "/var/run/docker.sock"
+    - "/run/docker.sock"
+    - "/run/containerd/containerd.sock"
+    - "/run/crio/crio.sock"
+    - "/var/run/secrets/kubernetes.io"
+    - "/run/systemd/private"
+    - "/proc/1"
+    - "/proc/sys/kernel"
+    - "/root"
+    - "/home/user/.ssh"
+    - "/home/user/.aws"
+    - "/home/user/.gcloud"
+    - "/home/user/.azure"
+    - "/home/user/.config/gcloud"
+    - "/home/user/.kube"
+    - "/home/user/.bashrc"
+    - "/home/user/.bash_profile"
+    - "/home/user/.profile"
+
+  # Network restrictions (Landlock ABI v4, kernel 6.7+). Freestyle is on
+  # 6.1.0 — ABI v2, no network landlock yet — so these are no-ops here, but
+  # leaving the explicit allow on outbound TCP so agentsh's proxy/eBPF layer
+  # remains the network gate. Will activate automatically once Freestyle ships
+  # a 6.7+ kernel.
+  network:
+    allow_connect_tcp: true
+    allow_bind_tcp: false
 
 # Capabilities as recommended by agentsh detect
 capabilities:

@@ -2,8 +2,8 @@ import { VmWith, VmWithInstance, VmSpec } from 'freestyle-sandboxes'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
-const AGENTSH_VERSION = 'v0.16.9'
-const AGENTSH_REPO = 'erans/agentsh'
+const AGENTSH_VERSION = 'v0.18.0'
+const AGENTSH_REPO = 'canyonroad/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const HEALTH_URL = `${AGENTSH_API}/health`
 
@@ -72,6 +72,22 @@ export class VmAgentshInstance extends VmWithInstance {
   }
 
   private async sessionExec(req: { command: string, args: string[] }, timeoutMs: number): Promise<ExecResult> {
+    // Single retry on transient empty/invalid responses (curl over the
+    // local socket occasionally returns empty stdout under load — see
+    // intermittent npm-test failures of policy-test / shim warmup).
+    let lastErr: ExecResult | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await this.sessionExecOnce(req, timeoutMs)
+      const transient = result.exitCode === -1 && (result.stderr ?? '').startsWith('Invalid response')
+      if (!transient) return result
+      lastErr = result
+      // brief backoff before retrying
+      await new Promise(r => setTimeout(r, 200))
+    }
+    return lastErr!
+  }
+
+  private async sessionExecOnce(req: { command: string, args: string[] }, timeoutMs: number): Promise<ExecResult> {
     const sessionId = await this.ensureSession()
     const body = JSON.stringify(req)
     const reqFile = `/tmp/exec-req-${++this.reqCounter}.json`
