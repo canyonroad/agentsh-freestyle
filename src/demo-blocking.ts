@@ -150,7 +150,7 @@ FILESYSTEM (via FUSE workspace overlay + Landlock):
   \u2713 /proc/1/environ      \u2192 denied by Landlock
   \u2713 ~/.ssh, ~/.aws       \u2192 denied (paths absent + Landlock)
 
-KERNEL CAPABILITIES (kernel 6.1.0-7-freestyle):
+KERNEL CAPABILITIES (kernel 6.1.0-8-freestyle):
   \u2713 seccomp-execve       \u2192 command interception
   \u2713 FUSE                 \u2192 workspace file interception
   \u2713 Landlock (ABI v2)    \u2192 system path filesystem policy (NEW since v0.16.x)

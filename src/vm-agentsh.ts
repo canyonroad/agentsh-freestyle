@@ -194,6 +194,7 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
           content: [
             '#!/bin/bash',
             'set -eux',
+            '# cache-bust: 2026-04-12',
             `curl -fsSL -L "${url}" -o /tmp/agentsh.deb`,
             'dpkg -i /tmp/agentsh.deb',
             'rm -f /tmp/agentsh.deb',

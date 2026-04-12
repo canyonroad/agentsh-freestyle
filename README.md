@@ -52,19 +52,20 @@ agentsh adds the governance layer that controls what agents can do inside the VM
 
 ## Backend Status on Freestyle
 
-Verified on agentsh v0.18.0, Freestyle kernel 6.1.0-7-freestyle:
+Verified on agentsh 0.18.0+d8c6123, Freestyle kernel 6.1.0-8-freestyle. Protection score: **65/100**.
 
 | Layer | Backend | Status |
 |---|---|---|
 | Command control | seccomp-execve + session API | Enforced |
 | Workspace files | FUSE per-session overlay | Enforced |
-| System path files | Landlock ABI v2 (per command) | Enforced |
+| System path files | Landlock ABI v2 (per command via unixwrap) | Enforced |
 | Network policy | userspace proxy + Landlock | Enforced |
-| Capability drop | capability(7) | Enforced |
 | Memory + cmd timeout | systemd + agentsh server | Enforced |
-| PID / CPU / disk I/O caps | cgroups v2 | Partial -- see Known Limitations |
+| Resource limits (cgroups) | cgroups v2 top-level fallback | Partial -- see Known Limitations |
 | eBPF cgroup/connect hooks | cilium/ebpf CO-RE | Off -- kernel ships without BTF |
 | Landlock network ABI | Landlock ABI v4 | Off -- needs kernel 6.7+ |
+| Capability drop | capability(7) | Off -- VM runs as root with full caps |
+| PID namespace | unshare/clone | Off -- host namespace |
 
 The full test suite (`npm test`) runs **64 assertions across 14 categories** and lands at **64/64 passing** on a clean run. The red team simulation (`npm run demo:attack`) blocks **41 of 44 attacks (93%)**.
 
@@ -168,7 +169,7 @@ agentsh-freestyle/
 
 The `test-template.ts` script creates a Freestyle VM and runs 64 security tests across 14 categories:
 
-- **Installation** -- agentsh binary, seccomp linkage, kernel version
+- **Installation** -- agentsh binary, seccomp linkage
 - **Server & config** -- health check, policy/config files, FUSE deferred
 - **Shell shim** -- bash.real preserved, unixwrap installed
 - **Policy evaluation** -- static policy-test for sudo, echo, workspace, /etc
@@ -206,12 +207,35 @@ npm test
 
 ## Known Limitations
 
-These are Freestyle-kernel-specific gaps that the integration documents transparently rather than papers over. Full technical write-ups live in [`docs/superpowers/specs/`](docs/superpowers/specs/).
-
-- **PID / CPU / disk I/O caps don't enforce.** v0.18.0 creates `/sys/fs/cgroup/agentsh.slice` and per-command sub-cgroups, but spawned processes are never migrated into them. Memory caps and command timeouts still trip via systemd and the agentsh server. Tracked at [canyonroad/agentsh#197](https://github.com/canyonroad/agentsh/issues/197).
+- **PID / CPU / disk I/O caps don't enforce.** agentsh creates `/sys/fs/cgroup/agentsh.slice` and per-command sub-cgroups, but spawned processes are never migrated into them. Memory caps and command timeouts still trip via systemd and the agentsh server. Tracked at [canyonroad/agentsh#197](https://github.com/canyonroad/agentsh/issues/197).
 - **Landlock derivation is base-directory granular.** Auto-derivation collapses `file_rules` paths at the first glob character, so `/etc/passwd`, `/etc/hosts`, and `/etc/shadow` all share one `/etc` allow. Tightening this needs finer-grained derivation in agentsh.
 - **`bash.real` bypasses `command_rules`.** The session API only evaluates the top-level command, so `agentsh.exec("sudo whoami")` runs as `bash.real -c "sudo whoami"` and the policy never sees `sudo`. Use `execDirect('sudo', ['whoami'])` for command-policy enforcement; Landlock still applies either way.
-- **eBPF cgroup/connect hooks cannot load.** Freestyle's kernel ships without BTF (`/sys/kernel/btf/vmlinux` missing), so cilium/ebpf CO-RE programs cannot relocate. The userspace proxy and Landlock cover the network gate. Run `npm run diag:ebpf` to reproduce; tracked at [canyonroad/agentsh#217](https://github.com/canyonroad/agentsh/issues/217). Enabling `CONFIG_DEBUG_INFO_BTF=y` in the Freestyle kernel build would unblock this.
+- **eBPF cgroup/connect hooks cannot load.** Freestyle's kernel ships without BTF (`/sys/kernel/btf/vmlinux` missing), so cilium/ebpf CO-RE programs cannot relocate. The userspace proxy and Landlock cover the network gate. Run `npm run diag:ebpf` to reproduce.
+
+## For Freestyle Engineers
+
+agentsh's protection score on Freestyle is currently **65/100**. The table below lists what the Freestyle platform could change to unlock the remaining 35 points and bring the integration to full coverage.
+
+| Change | What It Unlocks | Score Impact | Difficulty |
+|---|---|---|---|
+| **`CONFIG_DEBUG_INFO_BTF=y`** in kernel build | eBPF cgroup/connect hooks -- agentsh can attach BPF programs to intercept `connect()` at the kernel level, replacing the userspace proxy for network monitoring. Also enables cilium/ebpf CO-RE relocation for portable BPF programs. Add `CONFIG_DEBUG_INFO_BTF_MODULES=y` for module BTF. | +10 pts (NETWORK) | Kernel config flag |
+| **Upgrade kernel to 6.7+** | Landlock ABI v4 -- kernel-level TCP bind/connect filtering. agentsh can restrict which ports and addresses a process may bind or connect to, enforced by the kernel rather than a userspace proxy. Intermediate: 6.4+ gives ABI v3 (file truncate restriction). | +10 pts (NETWORK) | Kernel upgrade |
+| **Run agentsh with reduced capabilities** | Start the agentsh service with `CapabilityBoundingSet=` in the systemd unit or run under an unprivileged user. Currently the VM runs as root with all 41 capabilities, which agentsh reports honestly. Dropping unnecessary caps (e.g., keeping only `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_BPF`, `CAP_FOWNER`) improves privilege reduction scoring. | +7 pts (ISOLATION) | systemd unit config |
+| **PID namespace isolation** | Run the agentsh session in its own PID namespace (`unshare -p` or `clone(CLONE_NEWPID)`). Prevents an agent from seeing or signaling host processes. Currently the VM uses the host PID namespace. | +8 pts (ISOLATION) | Namespace setup |
+| **Migrate spawned processes into per-command cgroups** | agentsh creates `/sys/fs/cgroup/agentsh.slice/{cmd}` sub-cgroups but processes spawned via `vm.exec` land under `freestyle-supervisor.service` instead. If Freestyle's supervisor moved child processes into the agentsh cgroup, PID limits (`pids.max=100`), CPU caps (`cpu.max=50%`), and disk I/O caps (`io.max=25MB/s`) would actually enforce. | Correctness fix (caps currently silently no-op) | Supervisor change |
+
+**Quick wins** (kernel config only, no code changes):
+1. `CONFIG_DEBUG_INFO_BTF=y` -- single kernel config flag, unlocks eBPF
+2. `CapabilityBoundingSet=` in the agentsh systemd unit -- drops unused privileges
+
+**Medium effort** (kernel upgrade):
+3. Kernel 6.7+ -- unlocks Landlock network ABI v4
+
+**Larger effort** (architecture):
+4. PID namespace for sessions
+5. cgroup migration in the supervisor
+
+With all five, agentsh would reach **100/100** and enforce every layer end-to-end.
 
 ## Related Projects
 
