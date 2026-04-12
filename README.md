@@ -207,22 +207,16 @@ npm test
 
 ## For Freestyle Engineers
 
-agentsh's protection score on Freestyle is currently **65/100**. The table below lists what the Freestyle platform could change to unlock the remaining points and bring the integration closer to full coverage.
+agentsh's protection score on Freestyle is currently **65/100**. The items below are kernel-level changes that would unlock the remaining network monitoring points.
 
 | Change | What It Unlocks | Score Impact | Difficulty |
 |---|---|---|---|
 | **`CONFIG_DEBUG_INFO_BTF=y`** in kernel build | eBPF cgroup/connect hooks -- agentsh can attach BPF programs to intercept `connect()` at the kernel level, replacing the userspace proxy for network monitoring. Also enables cilium/ebpf CO-RE relocation for portable BPF programs. Add `CONFIG_DEBUG_INFO_BTF_MODULES=y` for module BTF. | +10 pts (NETWORK) | Kernel config flag |
 | **Upgrade kernel to 6.7+** | Landlock ABI v4 -- kernel-level TCP bind/connect filtering. agentsh can restrict which ports and addresses a process may bind or connect to, enforced by the kernel rather than a userspace proxy. Intermediate: 6.4+ gives ABI v3 (file truncate restriction). | +10 pts (NETWORK) | Kernel upgrade |
-| **Migrate spawned processes into per-command cgroups** | agentsh creates `/sys/fs/cgroup/agentsh.slice/{cmd}` sub-cgroups but processes spawned via `vm.exec` land under `freestyle-supervisor.service` instead. If Freestyle's supervisor moved child processes into the agentsh cgroup, PID limits (`pids.max=100`), CPU caps (`cpu.max=50%`), and disk I/O caps (`io.max=25MB/s`) would actually enforce. | Correctness fix (caps currently silently no-op) | Supervisor change |
 
-**Quick win** (kernel config only, no code changes):
-1. `CONFIG_DEBUG_INFO_BTF=y` -- single kernel config flag, unlocks eBPF
+**Quick win**: `CONFIG_DEBUG_INFO_BTF=y` is a single kernel config flag -- no code changes, unlocks eBPF.
 
-**Medium effort** (kernel upgrade):
-2. Kernel 6.7+ -- unlocks Landlock network ABI v4
-
-**Larger effort** (architecture):
-3. cgroup migration in the supervisor
+**Medium effort**: Kernel 6.7+ unlocks Landlock network ABI v4, giving agentsh kernel-enforced TCP filtering.
 
 ## Related Projects
 
