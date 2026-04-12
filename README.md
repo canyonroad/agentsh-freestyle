@@ -205,13 +205,6 @@ npm test
 | `npm run diag:kernel` | Ground-truth kernel probe -- bare VM and agentsh-provisioned VM side by side |
 | `npm run diag:ebpf` | Focused eBPF/BTF probe -- verifies the BTF-missing claim |
 
-## Known Limitations
-
-- **PID / CPU / disk I/O caps don't enforce.** agentsh creates `/sys/fs/cgroup/agentsh.slice` and per-command sub-cgroups, but spawned processes are never migrated into them. Memory caps and command timeouts still trip via systemd and the agentsh server. Tracked at [canyonroad/agentsh#197](https://github.com/canyonroad/agentsh/issues/197).
-- **Landlock derivation is base-directory granular.** Auto-derivation collapses `file_rules` paths at the first glob character, so `/etc/passwd`, `/etc/hosts`, and `/etc/shadow` all share one `/etc` allow. Tightening this needs finer-grained derivation in agentsh.
-- **`bash.real` bypasses `command_rules`.** The session API only evaluates the top-level command, so `agentsh.exec("sudo whoami")` runs as `bash.real -c "sudo whoami"` and the policy never sees `sudo`. Use `execDirect('sudo', ['whoami'])` for command-policy enforcement; Landlock still applies either way.
-- **eBPF cgroup/connect hooks cannot load.** Freestyle's kernel ships without BTF (`/sys/kernel/btf/vmlinux` missing), so cilium/ebpf CO-RE programs cannot relocate. The userspace proxy and Landlock cover the network gate. Run `npm run diag:ebpf` to reproduce.
-
 ## For Freestyle Engineers
 
 agentsh's protection score on Freestyle is currently **65/100**. The table below lists what the Freestyle platform could change to unlock the remaining 35 points and bring the integration to full coverage.
