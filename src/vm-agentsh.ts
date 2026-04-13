@@ -223,11 +223,49 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
     const defaultYaml = readFileSync(resolve(projectRoot, 'default.yaml'), 'utf-8')
     const startupSh = readFileSync(resolve(projectRoot, 'agentsh-startup.sh'), 'utf-8')
 
+    // systemd hardening drop-in — the SDK doesn't expose security directives,
+    // so we write a drop-in override that systemd picks up automatically.
+    const hardeningConf = [
+      '[Service]',
+      '# Drop 31 of 41 capabilities — keep only what agentsh needs:',
+      '#   SYS_ADMIN      — FUSE mount, seccomp-notify, cgroups',
+      '#   NET_ADMIN      — network proxy',
+      '#   DAC_OVERRIDE   — file access across users',
+      '#   DAC_READ_SEARCH — directory traversal',
+      '#   FOWNER, CHOWN  — workspace file ownership',
+      '#   KILL           — manage spawned processes',
+      '#   SETUID, SETGID — process identity',
+      '#   SYS_PTRACE     — read /proc for process info',
+      'CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_CHOWN CAP_KILL CAP_SETUID CAP_SETGID CAP_SYS_PTRACE',
+      '',
+      '# Prevent privilege escalation via setuid binaries',
+      'NoNewPrivileges=true',
+      '',
+      '# Only native architecture syscalls (blocks 32-bit compat)',
+      'SystemCallArchitectures=native',
+      '',
+      '# Restrict socket families to what agentsh uses',
+      'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK',
+      '',
+      '# Prevent kernel module loading',
+      'ProtectKernelModules=true',
+      '',
+      '# Lock execution domain',
+      'LockPersonality=true',
+      '',
+      '# No real-time scheduling',
+      'RestrictRealtime=true',
+      '',
+      '# No setuid/setgid file creation',
+      'RestrictSUIDSGID=true',
+    ].join('\n')
+
     return spec
       .additionalFiles({
         '/etc/agentsh/config.yaml': { content: configYaml },
         '/etc/agentsh/policies/default.yaml': { content: defaultYaml },
         '/opt/agentsh-startup.sh': { content: startupSh },
+        '/etc/systemd/system/agentsh.service.d/hardening.conf': { content: hardeningConf },
         '/etc/environment': {
           content: [
             'AGENTSH_SERVER=http://127.0.0.1:18080',

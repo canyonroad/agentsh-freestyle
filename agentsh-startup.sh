@@ -1,6 +1,6 @@
 #!/bin/bash
 # Restrict /dev/fuse to prevent any FUSE mount during snapshot
-sudo /bin/chmod 600 /dev/fuse 2>/dev/null || true
+/bin/chmod 600 /dev/fuse 2>/dev/null || true
 
 # Cgroups v2: v0.18.0 (canyonroad/agentsh#202 / #214) auto-detects the freestyle
 # nested-cgroup limitation (#197 — empty subtree_control under
@@ -25,7 +25,7 @@ for i in $(seq 1 15); do
 done
 
 # Install shell shim (replaces /bin/bash with agentsh shim)
-sudo agentsh shim install-shell --root / --shim /usr/bin/agentsh-shell-shim --bash --i-understand-this-modifies-the-host
+agentsh shim install-shell --root / --shim /usr/bin/agentsh-shell-shim --bash --i-understand-this-modifies-the-host
 
 # Warm up the shim
 /bin/bash -c "echo shim warmup ok" 2>/dev/null || true

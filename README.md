@@ -61,11 +61,12 @@ Verified on agentsh 0.18.0+d8c6123, Freestyle kernel 6.1.0-8-freestyle. Protecti
 | System path files | Landlock ABI v2 (per command via unixwrap) | Enforced |
 | Network policy | userspace proxy + Landlock | Enforced |
 | Memory + cmd timeout | systemd + agentsh server | Enforced |
-| Resource limits (cgroups) | cgroups v2 top-level fallback | Partial -- see Known Limitations |
+| Resource limits (cgroups) | cgroups v2 top-level fallback | Partial -- process migration gap |
 | eBPF cgroup/connect hooks | cilium/ebpf CO-RE | Off -- kernel ships without BTF |
 | Landlock network ABI | Landlock ABI v4 | Off -- needs kernel 6.7+ |
-| Capability drop | capability(7) | Off -- VM runs as root with full caps |
+| Capability drop | systemd CapabilityBoundingSet (10 of 41 caps) | Enforced |
 | PID namespace | unshare/clone | Off -- host namespace |
+| Systemd hardening | NoNewPrivileges, RestrictAddressFamilies, etc. | Enforced |
 
 The full test suite (`npm test`) runs **64 assertions across 14 categories** and lands at **64/64 passing** on a clean run. The red team simulation (`npm run demo:attack`) blocks **41 of 44 attacks (93%)**.
 

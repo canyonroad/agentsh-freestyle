@@ -229,7 +229,7 @@ async function main() {
     // =================================================================
     printSection('Kernel capabilities vs detect')
 
-    await test('server process has CAP_BPF in CapEff', async () => {
+    await test('server process has CAP_BPF dropped (systemd hardening)', async () => {
       // Use raw vm.exec — Landlock blocks /proc reads from sessions
       // (correct behavior; test needs the operator's view).
       const r = await vm.exec({
@@ -241,8 +241,8 @@ async function main() {
       const hex = (r.stdout ?? '').trim()
       if (!hex) return false
       const capEff = BigInt('0x' + hex)
-      // bit 39 = CAP_BPF
-      return (capEff & (1n << 39n)) !== 0n
+      // bit 39 = CAP_BPF — should be absent due to CapabilityBoundingSet
+      return (capEff & (1n << 39n)) === 0n
     })
 
     await test('cgroup v2 root accessible', async () => {
