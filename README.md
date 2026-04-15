@@ -222,7 +222,7 @@ agentsh's protection score on Freestyle is currently **65/100**. The items below
 ## Related Projects
 
 - [agentsh](https://github.com/canyonroad/agentsh) -- Runtime security for AI agents ([docs](https://www.agentsh.org/docs/))
-- [Freestyle](https://freestyle.sh) -- Snapshot-based VM infrastructure for AI agents
+- [Freestyle](https://freestyle.sh) -- Freestyle builds VM Sandbox infrastructure for AI Agents. Freestyle VMs are full hardware virtualized machines that start in ~300ms.
 
 ## License
 
