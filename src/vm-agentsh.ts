@@ -2,7 +2,7 @@ import { VmWith, VmWithInstance, VmSpec } from 'freestyle-sandboxes'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
-const AGENTSH_VERSION = 'v0.18.0'
+const AGENTSH_VERSION = 'v0.18.3'
 const AGENTSH_REPO = 'canyonroad/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const HEALTH_URL = `${AGENTSH_API}/health`
@@ -47,6 +47,10 @@ export class VmAgentshInstance extends VmWithInstance {
     throw new Error(`agentsh server not ready after ${retries * intervalMs / 1000}s. Logs:\n${logs}`)
   }
 
+  async getSessionId(): Promise<string> {
+    return this.ensureSession()
+  }
+
   private async ensureSession(): Promise<string> {
     if (this.sessionId) return this.sessionId
     const r = await this.vm.exec({
@@ -59,9 +63,13 @@ export class VmAgentshInstance extends VmWithInstance {
     return data.id
   }
 
-  /** Shell command execution — wraps in bash.real for full shell support.
-   *  Sub-commands within bash are NOT subject to command_rules. */
+  /** Shell-like command execution. Simple commands are sent directly so
+   * command_rules apply; opaque shell scripts may be denied by agentsh v0.18.3. */
   async exec(command: string, timeoutMs = 30000): Promise<ExecResult> {
+    if (!this.needsShell(command)) {
+      const parsed = this.parseCommand(command)
+      if (parsed) return this.execDirect(parsed.cmd, parsed.args, timeoutMs)
+    }
     return this.sessionExec({ command: '/bin/bash.real', args: ['-c', command] }, timeoutMs)
   }
 
@@ -194,7 +202,7 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
           content: [
             '#!/bin/bash',
             'set -eux',
-            '# cache-bust: 2026-04-12',
+            '# cache-bust: 2026-04-27',
             `curl -fsSL -L "${url}" -o /tmp/agentsh.deb`,
             'dpkg -i /tmp/agentsh.deb',
             'rm -f /tmp/agentsh.deb',

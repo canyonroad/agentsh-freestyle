@@ -56,7 +56,7 @@ sandbox:
     intercept_mode: "all"
     proxy_listen_addr: "127.0.0.1:0"
     # eBPF cgroup/connect hooks. The 4-layer detect bug (#196) was fixed
-    # in v0.18.0 / #199, BUT the Freestyle kernel ships WITHOUT BTF
+    # in v0.18.x / #199, BUT the Freestyle kernel ships WITHOUT BTF
     # (/sys/kernel/btf/vmlinux is missing), so cilium/ebpf can't relocate
     # types and the CO-RE programs fail to load. Until Freestyle ships a
     # kernel with CONFIG_DEBUG_INFO_BTF=y, network enforcement runs via
@@ -68,7 +68,7 @@ sandbox:
 
   # Cgroups v2 — Freestyle places agentsh under
   # /system.slice/freestyle-supervisor.service/, whose subtree_control is
-  # empty (canyonroad/agentsh#197). v0.18.0 ships #202 / #214: ProbeCgroupsV2
+  # empty (canyonroad/agentsh#197). v0.18.x ships #202 / #214: ProbeCgroupsV2
   # auto-falls back to a top-level /sys/fs/cgroup/agentsh.slice when the
   # nested cgroup has no delegated controllers. Leaving base_path unset so
   # the probe picks the right mode automatically — no manual workaround.
@@ -100,7 +100,7 @@ security:
 # ruleset before exec'ing each wrapped command. The ruleset is auto-derived
 # from the active policy's `file_rules` allow entries (see
 # canyonroad/agentsh#209 — wildcard-op derivation + MAKE_SOCK was fixed in
-# v0.18.0, so `operations: ["*"]` rules now feed paths into the ruleset).
+# v0.18.x, so `operations: ["*"]` rules now feed paths into the ruleset).
 #
 # We also list explicit allow/deny paths below as defence-in-depth — the
 # derived set covers our policy's allow rules but the extras here pin down

@@ -33,6 +33,7 @@ async function main() {
   try {
     console.log('Waiting for agentsh to be ready...')
     await agentsh.waitReady()
+    const sessionId = await agentsh.getSessionId()
     console.log('agentsh ready!\n')
 
     // =================================================================
@@ -45,9 +46,10 @@ async function main() {
       return r.exitCode === 0 && r.stdout.includes('agentsh')
     })
 
-    await test('seccomp support (libseccomp linked)', async () => {
-      const r = await agentsh.exec('ldd /usr/bin/agentsh 2>&1 | grep -E "seccomp|not.*dynamic"')
-      return r.stdout.includes('libseccomp')
+    await test('seccomp support detected', async () => {
+      const r = await vm.exec({ command: 'agentsh detect 2>&1', timeoutMs: 30000 })
+      const out = (r.stdout ?? '') + (r.stderr ?? '')
+      return /seccomp(_basic)?\s+✓/m.test(out)
     })
 
     // =================================================================
@@ -56,8 +58,8 @@ async function main() {
     printSection('Server & Configuration')
 
     await test('server healthy', async () => {
-      const r = await agentsh.exec('curl -s http://127.0.0.1:18080/health')
-      return r.stdout.trim() === 'ok'
+      const r = await vm.exec({ command: 'curl -s http://127.0.0.1:18080/health', timeoutMs: 5000 })
+      return (r.stdout ?? '').trim() === 'ok'
     })
 
     await test('server process running', async () => {
@@ -118,56 +120,56 @@ async function main() {
     printSection('Policy Evaluation (static)')
 
     await test('policy-test: sudo denied', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op exec --path sudo --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'exec', '--path', 'sudo', '--json'])
       return r.stdout.includes('"deny"') && r.stdout.includes('block-shell-escape')
     })
 
     await test('policy-test: echo allowed', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op exec --path echo --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'exec', '--path', 'echo', '--json'])
       return r.stdout.includes('"allow"')
     })
 
     await test('policy-test: workspace write allowed', async () => {
       // Try both /home/user and /workspace paths (policy uses ${PROJECT_ROOT} and /workspace)
-      const r1 = await agentsh.exec('agentsh debug policy-test --op write --path /home/user/test.txt --json 2>&1')
-      const r2 = await agentsh.exec('agentsh debug policy-test --op write --path /workspace/test.txt --json 2>&1')
+      const r1 = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_write', '--path', '/home/user/test.txt', '--json'])
+      const r2 = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_write', '--path', '/workspace/test.txt', '--json'])
       return r1.stdout.includes('"allow"') || r2.stdout.includes('"allow"')
     })
 
     await test('policy-test: workspace read allowed', async () => {
-      const r1 = await agentsh.exec('agentsh debug policy-test --op read --path /home/user/test.txt --json 2>&1')
-      const r2 = await agentsh.exec('agentsh debug policy-test --op read --path /workspace/test.txt --json 2>&1')
+      const r1 = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_read', '--path', '/home/user/test.txt', '--json'])
+      const r2 = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_read', '--path', '/workspace/test.txt', '--json'])
       return r1.stdout.includes('"allow"') || r2.stdout.includes('"allow"')
     })
 
     await test('policy-test: tmp write allowed', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op write --path /tmp/test.txt --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_write', '--path', '/tmp/test.txt', '--json'])
       return r.stdout.includes('"allow"') && r.stdout.includes('allow-tmp')
     })
 
     await test('policy-test: workspace delete is soft-delete', async () => {
-      const r1 = await agentsh.exec('agentsh debug policy-test --op delete --path /home/user/test.txt --json 2>&1')
-      const r2 = await agentsh.exec('agentsh debug policy-test --op delete --path /workspace/test.txt --json 2>&1')
+      const r1 = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_delete', '--path', '/home/user/test.txt', '--json'])
+      const r2 = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_delete', '--path', '/workspace/test.txt', '--json'])
       return r1.stdout.includes('soft-delete') || r2.stdout.includes('soft-delete')
     })
 
     await test('policy-test: SSH key access requires approval', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op read --path /root/.ssh/id_rsa --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_read', '--path', '/root/.ssh/id_rsa', '--json'])
       return r.stdout.includes('approve-ssh-access')
     })
 
     await test('policy-test: AWS credentials require approval', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op read --path /root/.aws/credentials --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_read', '--path', '/root/.aws/credentials', '--json'])
       return r.stdout.includes('approve-aws-credentials')
     })
 
     await test('policy-test: system path write denied', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op write --path /usr/bin/evil --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_write', '--path', '/usr/bin/evil', '--json'])
       return r.stdout.includes('"deny"')
     })
 
     await test('policy-test: /etc write denied', async () => {
-      const r = await agentsh.exec('agentsh debug policy-test --op write --path /etc/test.txt --json 2>&1')
+      const r = await agentsh.execDirect('agentsh', ['debug', 'policy-test', '--session', sessionId, '--op', 'file_write', '--path', '/etc/test.txt', '--json'])
       return r.stdout.includes('"deny"')
     })
 
@@ -204,7 +206,7 @@ async function main() {
     // Landlock is now available on Freestyle (kernel 6.1 ships ABI v2).
     await test('agentsh detect: landlock available', async () => capAvailable('landlock'))
 
-    // eBPF is detectable in v0.18.0 (#196 → #199 fixed the detect bug)
+    // eBPF is detectable in v0.18.x (#196 -> #199 fixed the detect bug)
     // BUT the Freestyle kernel ships without BTF (CONFIG_DEBUG_INFO_BTF=n),
     // so eBPF CO-RE programs can't load. Detect correctly reports this.
     // Until Freestyle ships a BTF-enabled kernel, ebpf stays unavailable
@@ -217,12 +219,12 @@ async function main() {
     //
     // The tests below establish kernel reality independently of
     // `agentsh detect`. They originally guarded against bugs that have
-    // since been fixed in v0.18.0:
+    // since been fixed in v0.18.x:
     //
-    //   - canyonroad/agentsh#196 → fixed in #199 (eBPF detect)
-    //   - canyonroad/agentsh#197 → fixed in #202/#214 (cgroup auto-fallback)
-    //   - canyonroad/agentsh#198 → fixed in #200 (capability-drop scoring)
-    //   - canyonroad/agentsh#209 → fixed in v0.18.0 (Landlock derivation)
+    //   - canyonroad/agentsh#196 -> fixed in #199 (eBPF detect)
+    //   - canyonroad/agentsh#197 -> fixed in #202/#214 (cgroup auto-fallback)
+    //   - canyonroad/agentsh#198 -> fixed in #200 (capability-drop scoring)
+    //   - canyonroad/agentsh#209 -> fixed in v0.18.x (Landlock derivation)
     //
     // We keep the kernel-reality probes since they're cheap regression
     // signals; if any of them flip back, we know detect drifted again.
@@ -254,7 +256,7 @@ async function main() {
     })
 
     await test('agentsh cgroup slice present (auto-fallback or nested)', async () => {
-      // v0.18.0 ProbeCgroupsV2 falls back to /sys/fs/cgroup/agentsh.slice
+      // v0.18.x ProbeCgroupsV2 falls back to /sys/fs/cgroup/agentsh.slice
       // when the freestyle-supervisor.service nested cgroup has empty
       // subtree_control. Either path is acceptable as long as one exists.
       const r = await vm.exec({
@@ -267,7 +269,7 @@ async function main() {
     })
 
     // PID limit enforcement is a documented gap on Freestyle's nested cgroup
-    // setup. v0.18.0's top-level fallback (canyonroad/agentsh#202/#214) does
+    // setup. v0.18.x top-level fallback (canyonroad/agentsh#202/#214) does
     // create /sys/fs/cgroup/agentsh.slice and per-command sub-cgroups, but:
     //
     //   1. agentsh runs as its own systemd service (/system.slice/agentsh.service)
@@ -280,7 +282,7 @@ async function main() {
     // letting it cause a noisy red FAIL. If/when agentsh moves spawned procs
     // into the per-command cgroup, this test should be tightened.
     await test('PID limit (resource_limits.pids_max=100, NOT enforced — agentsh#?)', async () => {
-      const r = await agentsh.exec(`python3 -c "
+      const r = await agentsh.execDirect('python3', ['-c', `
 import os, sys
 pids = []
 try:
@@ -298,7 +300,7 @@ finally:
         try: os.waitpid(p, 0)
         except: pass
 print(len(pids))
-" 2>&1`, 30000)
+`], 30000)
       const forked = parseInt(r.stdout.trim().split('\n').pop() ?? '0', 10)
       // Documenting the gap: any forked > 0 result is acceptable here.
       // We log a soft warning if forked >= 150 so we notice if the gap closes.
@@ -355,27 +357,27 @@ print(len(pids))
     printSection('Network Blocking')
 
     await test('package registry allowed (npmjs.org)', async () => {
-      const r = await agentsh.exec('curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://registry.npmjs.org/')
+      const r = await agentsh.execDirect('curl', ['-s', '--connect-timeout', '10', '--max-time', '15', '-o', '/dev/null', '-w', '%{http_code}', 'https://registry.npmjs.org/'])
       return r.stdout.trim() === '200'
     })
 
     await test('metadata endpoint blocked (169.254.169.254)', async () => {
-      const r = await agentsh.exec('curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://169.254.169.254/')
+      const r = await agentsh.execDirect('curl', ['-s', '--connect-timeout', '3', '-o', '/dev/null', '-w', '%{http_code}', 'http://169.254.169.254/'])
       return r.stdout.includes('403') || r.stdout.includes('000') || r.exitCode !== 0
     })
 
     await test('evil.com blocked', async () => {
-      const r = await agentsh.exec('curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://evil.com/')
+      const r = await agentsh.execDirect('curl', ['-s', '--connect-timeout', '5', '-o', '/dev/null', '-w', '%{http_code}', 'https://evil.com/'])
       return r.stdout.includes('400') || r.stdout.includes('403') || r.stdout.includes('000') || r.exitCode !== 0
     })
 
     await test('private network blocked (10.0.0.1)', async () => {
-      const r = await agentsh.exec('curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://10.0.0.1/')
+      const r = await agentsh.execDirect('curl', ['-s', '--connect-timeout', '3', '-o', '/dev/null', '-w', '%{http_code}', 'http://10.0.0.1/'])
       return r.stdout.includes('403') || r.stdout.includes('000') || r.exitCode !== 0
     })
 
     await test('unknown domain blocked (default-deny)', async () => {
-      const r = await agentsh.exec('curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://api.github.com/ 2>&1')
+      const r = await agentsh.execDirect('curl', ['-s', '--connect-timeout', '5', '-o', '/dev/null', '-w', '%{http_code}', 'https://api.github.com/'])
       return r.stdout.includes('403') || r.stdout.includes('000') || r.exitCode !== 0
     })
 
@@ -385,17 +387,17 @@ print(len(pids))
     printSection('Environment Policy')
 
     await test('safe vars present (HOME via bash)', async () => {
-      const r = await agentsh.exec('echo "HOME=$HOME"')
+      const r = await agentsh.execDirect('python3', ['-c', 'import os; print("HOME=" + os.environ.get("HOME", ""))'])
       return r.stdout.includes('HOME=/') || r.stdout.includes('HOME=')
     })
 
     await test('PATH present', async () => {
-      const r = await agentsh.exec('echo "PATH=$PATH"')
+      const r = await agentsh.execDirect('python3', ['-c', 'import os; print("PATH=" + os.environ.get("PATH", ""))'])
       return r.stdout.includes('PATH=/')
     })
 
     await test('BASH_ENV or AGENTSH vars set', async () => {
-      const r = await agentsh.exec('echo "$BASH_ENV $AGENTSH_SESSION_ID"')
+      const r = await agentsh.execDirect('python3', ['-c', 'import os; print(os.environ.get("BASH_ENV", "") + " " + os.environ.get("AGENTSH_SESSION_ID", ""))'])
       // Session env may not have BASH_ENV but should have AGENTSH_SESSION_ID
       return r.stdout.trim().length > 0
     })
@@ -406,57 +408,52 @@ print(len(pids))
     printSection('File I/O')
 
     await test('write to workspace succeeds', async () => {
-      const r = await agentsh.exec('echo "fileio-test" > /home/user/fileio-test.txt && cat /home/user/fileio-test.txt')
-      return r.exitCode === 0 && r.stdout.includes('fileio-test')
+      const write = await agentsh.execDirect('python3', ['-c', "open('/home/user/fileio-test.txt','w').write('fileio-test\\n')"])
+      const read = await agentsh.execDirect('cat', ['/home/user/fileio-test.txt'])
+      return write.exitCode === 0 && read.exitCode === 0 && read.stdout.includes('fileio-test')
     })
 
     await test('write to /tmp succeeds', async () => {
-      const r = await agentsh.exec('echo "tmp-test" > /tmp/fileio-test.txt && cat /tmp/fileio-test.txt')
-      return r.exitCode === 0 && r.stdout.includes('tmp-test')
+      const write = await agentsh.execDirect('python3', ['-c', "open('/tmp/fileio-test.txt','w').write('tmp-test\\n')"])
+      const read = await agentsh.execDirect('cat', ['/tmp/fileio-test.txt'])
+      return write.exitCode === 0 && read.exitCode === 0 && read.stdout.includes('tmp-test')
     })
 
     await test('Python write to workspace succeeds', async () => {
-      const r = await agentsh.exec("python3 -c \"open('/home/user/py-test.txt','w').write('hello')\" && cat /home/user/py-test.txt")
-      return r.exitCode === 0 && r.stdout.includes('hello')
+      const write = await agentsh.execDirect('python3', ['-c', "open('/home/user/py-test.txt','w').write('hello')"])
+      const read = await agentsh.execDirect('cat', ['/home/user/py-test.txt'])
+      return write.exitCode === 0 && read.exitCode === 0 && read.stdout.includes('hello')
     })
 
-    // System path writes: with Landlock active (v0.18.0 + Freestyle 6.1),
+    // System path writes: with Landlock active (agentsh v0.18.x + Freestyle 6.1),
     // /etc is not in allow_write so kernel-level Landlock denies the write
     // even though the process runs as root. This was a documented gap
     // before Landlock landed on Freestyle.
     await test('write to /etc denied by Landlock', async () => {
-      const r = await agentsh.exec('echo "hack" > /etc/test_file 2>&1')
+      const r = await agentsh.execDirect('python3', ['-c', "open('/etc/test_file','w').write('hack')"])
       // Expect failure with Permission denied (Landlock blocks the open)
       const denied = r.exitCode !== 0 && /(Permission denied|Operation not permitted)/i.test(r.stdout + r.stderr)
       // Belt-and-braces: confirm the file actually didn't get written
-      const check = await agentsh.exec('test -f /etc/test_file && echo created || echo missing')
-      return denied && check.stdout.includes('missing')
+      const check = await vm.exec({ command: 'test -f /etc/test_file && echo created || echo missing', timeoutMs: 5000 })
+      return denied && (check.stdout ?? '').includes('missing')
     })
 
     // =================================================================
     // 10. COMMAND BLOCKING — INDIRECT CONTEXTS
     // =================================================================
     printSection('Indirect Context Blocking')
-    console.log('  (Within bash.real, command_rules are NOT evaluated on sub-commands.')
-    console.log('   Sessions are wrapped by unixwrap which applies a Landlock')
-    console.log('   ruleset, but the ruleset auto-derives base dirs from policy')
-    console.log('   file_rules, so /etc reads stay open and sudo still runs.)\n')
+    console.log('  (agentsh v0.18.3 derives simple shell -c payloads for policy checks')
+    console.log('   and fails closed on opaque shell scripts when restrictive command')
+    console.log('   rules are present.)\n')
 
-    // sudo through bash.real: sudo binary is in /usr/bin (allow_execute) and
-    // /etc/sudoers reads land under /etc which is in the derived allow_read
-    // set (from /etc/passwd, /etc/group, ... entries). So sudo CURRENTLY
-    // succeeds. Documenting the gap so we notice if/when finer-grained path
-    // matching lands. To actually block sudo we'd need either command_rules
-    // evaluated in indirect contexts, or per-file Landlock rules.
-    await test('sudo via bash (root — Landlock ruleset too coarse)', async () => {
-      const r = await agentsh.exec('sudo whoami 2>&1')
-      // Documents that sudo works within bash.real on a root-running VM
-      return true
+    await test('sudo via bash -c blocked by derived command policy', async () => {
+      const r = await agentsh.execDirect('/bin/bash.real', ['-c', 'sudo whoami'])
+      return r.blocked && r.rule === 'block-shell-escape'
     })
 
-    await test('env sudo via bash (root — same gap)', async () => {
-      const r = await agentsh.exec('env sudo whoami 2>&1')
-      return true
+    await test('opaque bash -c fails closed', async () => {
+      const r = await agentsh.execDirect('/bin/bash.real', ['-c', 'sudo whoami; true'])
+      return r.blocked && r.rule === 'shellc-opaque-script'
     })
 
     // Verify Landlock IS applied to wrapped commands by checking the
@@ -468,12 +465,12 @@ print(len(pids))
     })
 
     await test('env whoami via bash (allowed)', async () => {
-      const r = await agentsh.exec('env whoami')
+      const r = await agentsh.execDirect('/bin/bash.real', ['-c', 'env whoami'])
       return r.exitCode === 0
     })
 
     await test('find -exec echo (allowed)', async () => {
-      const r = await agentsh.exec('find /tmp -maxdepth 0 -exec echo found \\;')
+      const r = await agentsh.execDirect('find', ['/tmp', '-maxdepth', '0', '-exec', 'echo', 'found', ';'])
       return r.exitCode === 0 && r.stdout.includes('found')
     })
 
@@ -483,25 +480,25 @@ print(len(pids))
     printSection('FUSE Workspace & Soft Delete')
 
     await test('create file for soft-delete', async () => {
-      const r = await agentsh.exec("python3 -c \"open('/home/user/soft_del_test.txt','w').write('important data\\n')\"")
+      const r = await agentsh.execDirect('python3', ['-c', "open('/home/user/soft_del_test.txt','w').write('important data\\n')"])
       return r.exitCode === 0
     })
 
     await test('rm file (soft-deleted)', async () => {
-      const r = await agentsh.exec('rm /home/user/soft_del_test.txt 2>&1')
+      const r = await agentsh.execDirect('rm', ['/home/user/soft_del_test.txt'])
       return r.exitCode === 0
     })
 
     await test('file gone from original location', async () => {
-      const r = await agentsh.exec('test -f /home/user/soft_del_test.txt && echo exists || echo gone')
+      const r = await agentsh.execDirect('python3', ['-c', "import os; print('exists' if os.path.exists('/home/user/soft_del_test.txt') else 'gone')"])
       return r.stdout.includes('gone')
     })
 
     await test('quarantine directory has entries', async () => {
       // Check both agentsh trash and the quarantine directory
-      const trash = await agentsh.exec('agentsh trash list 2>&1')
-      const dir = await agentsh.exec('find /var/lib/agentsh -name "quarantine" -type d -exec ls {} \\; 2>/dev/null')
-      return trash.stdout.includes('soft_del_test') || dir.stdout.trim().length > 0 || trash.exitCode === 0
+      const trash = await agentsh.execDirect('agentsh', ['trash', 'list'])
+      const dir = await vm.exec({ command: 'find /var/lib/agentsh -name "quarantine" -type d -exec ls {} \\; 2>/dev/null', timeoutMs: 5000 })
+      return trash.stdout.includes('soft_del_test') || (dir.stdout ?? '').trim().length > 0 || trash.exitCode === 0
     })
 
     // =================================================================
@@ -511,12 +508,12 @@ print(len(pids))
 
     // These paths don't exist, so they fail with "No such file" — which is correct
     await test('read ~/.ssh/id_rsa fails', async () => {
-      const r = await agentsh.exec('cat /home/user/.ssh/id_rsa 2>&1')
+      const r = await agentsh.execDirect('cat', ['/home/user/.ssh/id_rsa'])
       return r.exitCode !== 0
     })
 
     await test('read ~/.aws/credentials fails', async () => {
-      const r = await agentsh.exec('cat /home/user/.aws/credentials 2>&1')
+      const r = await agentsh.execDirect('cat', ['/home/user/.aws/credentials'])
       return r.exitCode !== 0
     })
 
@@ -524,7 +521,7 @@ print(len(pids))
     // even though the VM runs as root. This was a documented gap before
     // Landlock landed on Freestyle.
     await test('read /proc/1/environ blocked by Landlock', async () => {
-      const r = await agentsh.exec('cat /proc/1/environ 2>&1')
+      const r = await agentsh.execDirect('cat', ['/proc/1/environ'])
       // Either the open is denied (Permission denied) or, if Landlock
       // can't fence /proc cleanly, at least nothing meaningful is read.
       const denied = r.exitCode !== 0 && /(Permission denied|Operation not permitted)/i.test(r.stdout + r.stderr)
@@ -537,13 +534,13 @@ print(len(pids))
     printSection('Audit Trail')
 
     await test('audit database exists', async () => {
-      const r = await agentsh.exec('test -f /var/lib/agentsh/events.db && echo exists')
-      return r.stdout.includes('exists')
+      const r = await vm.exec({ command: 'test -f /var/lib/agentsh/events.db && echo exists', timeoutMs: 5000 })
+      return (r.stdout ?? '').includes('exists')
     })
 
     await test('audit has command events', async () => {
-      const r = await agentsh.exec('sqlite3 /var/lib/agentsh/events.db "SELECT COUNT(*) FROM events" 2>&1')
-      const count = parseInt(r.stdout.trim(), 10)
+      const r = await vm.exec({ command: 'sqlite3 /var/lib/agentsh/events.db "SELECT COUNT(*) FROM events" 2>&1', timeoutMs: 5000 })
+      const count = parseInt((r.stdout ?? '').trim(), 10)
       return count > 0
     })
 

@@ -1,6 +1,6 @@
 # agentsh + Freestyle
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.0 with [Freestyle](https://freestyle.sh) VMs.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.3 with [Freestyle](https://freestyle.sh) VMs.
 
 ## Why agentsh + Freestyle?
 
@@ -52,7 +52,7 @@ agentsh adds the governance layer that controls what agents can do inside the VM
 
 ## Backend Status on Freestyle
 
-Verified on agentsh 0.18.0+d8c6123, Freestyle kernel 6.1.0-8-freestyle. Protection score: **65/100**.
+Verified on agentsh 0.18.3+5f9af81, Freestyle kernel 6.1.0-8-freestyle. Protection score: **65/100**.
 
 | Layer | Backend | Status |
 |---|---|---|
@@ -69,6 +69,10 @@ Verified on agentsh 0.18.0+d8c6123, Freestyle kernel 6.1.0-8-freestyle. Protecti
 | Systemd hardening | NoNewPrivileges, RestrictAddressFamilies, etc. | Enforced |
 
 The full test suite (`npm test`) runs **64 assertions across 14 categories** and lands at **64/64 passing** on a clean run. The red team simulation (`npm run demo:attack`) blocks **41 of 44 attacks (93%)**.
+
+### agentsh v0.18.3 Notes
+
+This repo pins the Linux `.deb` release asset for agentsh `v0.18.3`. Compared with the original `v0.18.0` Freestyle port, this release tightens `agentsh wrap` session gating, restores file-monitor seccomp parity for the wrap path, and includes release/CI hardening for seccomp and packaging coverage. The Freestyle posture remains the same: eBPF stays disabled because the kernel lacks BTF, and cgroup PID/CPU/I/O limits remain a documented migration gap.
 
 ## Quick Start
 
@@ -127,9 +131,9 @@ vm.exec("sudo whoami")
 Two execution modes are exposed:
 
 - **`execDirect(command, args)`** -- sends the command directly to the session API. The server evaluates it against `command_rules` and returns `E_POLICY_DENIED` (exit 126) for blocked commands. **Use this for policy enforcement.**
-- **`exec(command)`** -- wraps in `/bin/bash.real -c "..."` for shell features (pipes, redirections). The session API only sees `bash.real` as the top-level command, so sub-commands within bash are **not** evaluated against `command_rules` (Landlock still applies via unixwrap).
+- **`exec(command)`** -- convenience helper for simple shell-like strings. Simple commands are parsed and sent through `execDirect()` so `command_rules` still apply. Commands requiring shell metacharacters fall back to `/bin/bash.real -c`, where agentsh v0.18.3 derives simple payloads for policy checks and fails closed on opaque scripts when restrictive command rules are present.
 
-The `demo:multi-context` demo shows this distinction explicitly.
+The `demo:multi-context` demo shows direct commands, derived shell payloads, and opaque shell-script denial explicitly.
 
 ## Configuration
 
@@ -159,7 +163,7 @@ agentsh-freestyle/
 │   ├── demo-audit.ts            # Audit trail and event logging
 │   ├── demo-attack-sim.ts       # Red team attack simulation (44 attacks)
 │   ├── demo-resource-limits.ts  # Resource limits (PID, memory, CPU, I/O)
-│   ├── demo-multi-context.ts    # Direct API blocking vs bash sub-process
+│   ├── demo-multi-context.ts    # Direct API, shell derivation, opaque shell blocking
 │   ├── demo-fuse-protection.ts  # FUSE workspace + Landlock system paths
 │   ├── diag-kernel.ts           # Bare vs agentsh-provisioned VM probe
 │   └── diag-ebpf.ts             # Focused eBPF/BTF probe
@@ -170,7 +174,7 @@ agentsh-freestyle/
 
 The `test-template.ts` script creates a Freestyle VM and runs 64 security tests across 14 categories:
 
-- **Installation** -- agentsh binary, seccomp linkage
+- **Installation** -- agentsh binary, seccomp capability detection
 - **Server & config** -- health check, policy/config files, FUSE deferred
 - **Shell shim** -- bash.real preserved, unixwrap installed
 - **Policy evaluation** -- static policy-test for sudo, echo, workspace, /etc
@@ -180,7 +184,7 @@ The `test-template.ts` script creates a Freestyle VM and runs 64 security tests 
 - **Environment policy** -- AWS_*/SECRET_*/TOKEN* filtered, HOME/PATH preserved
 - **File I/O** -- workspace/tmp writes allowed; /etc, /usr/bin writes blocked
 - **Landlock per command** -- /etc, /usr/bin, /proc/sys writes EACCES from kernel
-- **Multi-context blocking** -- direct API vs bash sub-process behavior
+- **Multi-context blocking** -- direct API, shell derivation, opaque shell blocking
 - **FUSE workspace** -- session overlay exists, soft-delete create/rm/verify
 - **Credential blocking** -- ~/.ssh/id_rsa, ~/.aws/credentials blocked
 - **Resource limits** -- memory caps and command timeouts trip; PID/CPU/IO documented as gap
@@ -201,7 +205,7 @@ npm test
 | `npm run demo:env` | Environment filtering -- secrets stripped, safe vars passed through |
 | `npm run demo:attack` | Red team simulation -- 44 attacks across recon/privesc/lateral/exfil (93% blocked) |
 | `npm run demo:resources` | Resource limits -- PID bomb, memory bomb, CPU spin, I/O flood, cgroup status |
-| `npm run demo:multi-context` | Command enforcement model -- direct API blocking vs bash sub-process |
+| `npm run demo:multi-context` | Command enforcement model -- direct API, shell derivation, opaque shell blocking |
 | `npm run demo:fuse` | FUSE workspace + Landlock system path enforcement |
 | `npm run diag:kernel` | Ground-truth kernel probe -- bare VM and agentsh-provisioned VM side by side |
 | `npm run diag:ebpf` | Focused eBPF/BTF probe -- verifies the BTF-missing claim |

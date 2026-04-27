@@ -134,7 +134,7 @@ async function main() {
     console.log('SUMMARY')
     console.log('='.repeat(60))
     console.log(`
-agentsh v0.18.0 policy enforcement on Freestyle VM:
+agentsh v0.18.3 policy enforcement on Freestyle VM:
 
 COMMAND BLOCKING (via session API command_rules):
   \u2717 sudo, su, chroot    \u2192 block-shell-escape
