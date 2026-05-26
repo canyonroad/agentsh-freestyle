@@ -2,7 +2,7 @@ import { VmWith, VmWithInstance, VmSpec } from 'freestyle-sandboxes'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
-const AGENTSH_VERSION = 'v0.18.3'
+const AGENTSH_VERSION = 'v0.20.2'
 const AGENTSH_REPO = 'canyonroad/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const HEALTH_URL = `${AGENTSH_API}/health`
@@ -64,7 +64,8 @@ export class VmAgentshInstance extends VmWithInstance {
   }
 
   /** Shell-like command execution. Simple commands are sent directly so
-   * command_rules apply; opaque shell scripts may be denied by agentsh v0.18.3. */
+   * command_rules apply; opaque shell scripts are handled per
+   * sandbox.seccomp.shellc.opaque (agentsh v0.20.x). */
   async exec(command: string, timeoutMs = 30000): Promise<ExecResult> {
     if (!this.needsShell(command)) {
       const parsed = this.parseCommand(command)
@@ -202,13 +203,13 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
           content: [
             '#!/bin/bash',
             'set -eux',
-            '# cache-bust: 2026-04-27',
+            '# cache-bust: 2026-05-25-v0.20.2',
             `curl -fsSL -L "${url}" -o /tmp/agentsh.deb`,
             'dpkg -i /tmp/agentsh.deb',
             'rm -f /tmp/agentsh.deb',
             'agentsh --version',
-            'mkdir -p /etc/agentsh/policies /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh /home/user',
-            'chmod 755 /etc/agentsh /etc/agentsh/policies /var/lib/agentsh /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh',
+            'mkdir -p /etc/agentsh/policies /etc/agentsh/mitigations /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh /home/user',
+            'chmod 755 /etc/agentsh /etc/agentsh/policies /etc/agentsh/mitigations /var/lib/agentsh /var/lib/agentsh/quarantine /var/lib/agentsh/sessions /var/log/agentsh',
             'echo "root ALL=(ALL) NOPASSWD: /usr/bin/agentsh" >> /etc/sudoers',
             'echo "root ALL=(ALL) NOPASSWD: /bin/chmod 666 /dev/fuse" >> /etc/sudoers',
             'echo "root ALL=(ALL) NOPASSWD: /bin/chmod 600 /dev/fuse" >> /etc/sudoers',

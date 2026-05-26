@@ -53,7 +53,7 @@ async function main() {
     console.log()
     console.log('This demo shows how command_rules are enforced across')
     console.log('direct session API calls, derived bash -c payloads, and')
-    console.log('opaque shell scripts in agentsh v0.18.3.')
+    console.log('opaque shell scripts in agentsh v0.20.x (shellc.opaque: deny).')
 
     // Section 1: Direct API blocking (baseline)
     printSection('1. DIRECT API BLOCKING (baseline)')

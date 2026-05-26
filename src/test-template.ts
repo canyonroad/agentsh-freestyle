@@ -442,9 +442,9 @@ print(len(pids))
     // 10. COMMAND BLOCKING — INDIRECT CONTEXTS
     // =================================================================
     printSection('Indirect Context Blocking')
-    console.log('  (agentsh v0.18.3 derives simple shell -c payloads for policy checks')
-    console.log('   and fails closed on opaque shell scripts when restrictive command')
-    console.log('   rules are present.)\n')
+    console.log('  (agentsh v0.20.x derives simple shell -c payloads for policy checks')
+    console.log('   and fails closed on opaque shell scripts via sandbox.seccomp.shellc.opaque:')
+    console.log('   deny, even though seccomp-execve interception is active.)\n')
 
     await test('sudo via bash -c blocked by derived command policy', async () => {
       const r = await agentsh.execDirect('/bin/bash.real', ['-c', 'sudo whoami'])

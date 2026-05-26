@@ -6,7 +6,7 @@ A comprehensive security demo showcasing agentsh runtime governance within Frees
 
 **Value proposition:** Freestyle provides fast VM isolation (<700ms provisioning). agentsh adds policy-driven governance (command blocking, network filtering, file I/O interception, secret redaction, audit logging). Together they create defense-in-depth security for untrusted AI agent code.
 
-> **Status update (2026-04-27):** This document captured the original design (agentsh v0.16.9 + Freestyle kernel 6.1.0-6, no Landlock). The integration now pins **agentsh v0.18.3** on Freestyle kernels that ship **Landlock**. See "v0.18.x + Landlock Update" at the bottom of this document for the current state, and `README.md` for the user-facing summary.
+> **Status update (2026-05-25):** This document captured the original design (agentsh v0.16.9 + Freestyle kernel 6.1.0-6, no Landlock). The integration now pins **agentsh v0.20.2** on Freestyle kernels that ship **Landlock** (now `6.1.0-11-freestyle`). See "v0.18.x + Landlock Update" and the newer "v0.20.2 Update" at the bottom of this document for the current state, and `README.md` for the user-facing summary.
 
 ## Project Structure
 
@@ -382,3 +382,27 @@ This section supersedes the 2026-04-08 "Kernel Reality vs agentsh Detect" sectio
 | **canyonroad/agentsh#197** | Resource limits silently no-op'd because agentsh placed per-command cgroups under a parent (`freestyle-supervisor.service`) whose `subtree_control` was empty | `ProbeCgroupsV2` auto-fallback added in #202/#214. Slice is created correctly, but spawned processes are not migrated into the per-command cgroup, so PID/CPU/disk-IO caps still no-op. Memory and timeout still trip via systemd/server-side path. Tracked as a v0.18.x follow-up. |
 | **canyonroad/agentsh#198** | Capability-drop scored 15/15 while `CapEff` was `0x1ffffffffff` (all caps) — cosmetic | Fixed (#200). Score is honest now. The total going from "80/100" to "65/100" reflects truth-in-reporting, not regression. |
 | **canyonroad/agentsh#209** | Auto-derived Landlock ruleset dropped rules with `operations: ["*"]` and didn't include `MAKE_SOCK` | Fixed in v0.18.0. Wildcard ops are honored; the `socket(AF_UNIX)` test for unix-socket interception now works. |
+
+## v0.20.2 Update (2026-05-25)
+
+The pin moved from **v0.18.3** to **v0.20.2** (`0.20.2+67950cea`); the Freestyle kernel line advanced to **`6.1.0-11-freestyle`**. The protection score is unchanged at **65/100** and the test results are unchanged (`npm test` 64/64, `npm run demo:attack` 41/44 / 93%), but two things are materially better and one config knob is now pinned.
+
+### What changed in v0.20.x (vs v0.18.3)
+
+| Area | v0.18.3 (old) | v0.20.2 (now) |
+|---|---|---|
+| **Detect honesty (#389/#392)** | `seccomp-execve` reported available from a read-only kernel probe | `agentsh detect` now runs a real `SECCOMP_RET_USER_NOTIF` install-probe before claiming the backend. On Freestyle the install **succeeds** (`seccomp_user_notify ✓`, server proc `Seccomp_filters: 13`), so `COMMAND CONTROL 25/25` via `seccomp-execve` is verified, not assumed. Hosts where the listener can't install (Daytona/`EBUSY`) now honestly drop to `landlock` mode — Freestyle is not one of them. |
+| **Opaque shell-c (#381/#386)** | Opaque `bash -c`/`sh -c` was blanket pre-denied as `shellc-opaque-script` | Default is now `enforce`: with execve interception active the script runs and every inner `execve` is policed. New `sandbox.seccomp.shellc.opaque` knob (`deny`/`enforce`/`allow`). We pin **`deny`** to keep the fail-closed posture and the `shellc-opaque-script` semantics the test suite asserts. |
+| **Dirty Frag mitigation (#293)** | N/A | `sandbox.seccomp.mitigation_sets: [dirtyfrag-conservative]` blocks the Openwall Dirty Frag (2026-05-07) socket tuples (`AF_RXRPC`, `AF_NETLINK`/`NETLINK_XFRM`) via seccomp socket rules — no eBPF needed, so it works on the BTF-less kernel. `hardening_profiles` was removed upstream in favor of mitigation sets. |
+| **Socket-family blocking (#261)** | N/A | Default-on seccomp/ptrace block list for 12 niche `AF_*` families that are recurring kernel attack entry points. |
+| **Shim kernel-install (#274, 0.19.1+)** | Shim routed via session API only | The shell shim now attempts a kernel-layer seccomp install on invocation. The session-API path the tests use is unaffected; a raw-shell `vm.exec` may occasionally hit a cold-start install race that fails closed (`shim_install` fall-through). |
+
+### Config posture delta
+
+- **Added** `sandbox.seccomp.shellc.opaque: deny` — fail-closed on opaque shell scripts now that interception is active (otherwise the v0.20.x default `enforce` would run them under per-exec policing).
+- **Added** `sandbox.seccomp.mitigation_sets: [dirtyfrag-conservative]` + `sandbox.seccomp.mitigation_dirs: [/etc/agentsh/mitigations]` (the dir is created empty by the install script; only the built-in set is used).
+- Everything else is unchanged: eBPF off (no BTF), Landlock ABI v2, cgroup top-level fallback with the documented process-migration gap, systemd hardening drop-in (10 of 41 caps).
+
+### Remaining gaps (unchanged)
+
+The four gaps from the v0.18.x section still hold: cgroup process-migration, eBPF blocked by missing BTF, base-directory-granular Landlock derivation (the 3 `demo:attack` passes in Phase 1 recon), and opaque-shell handling — now explicitly pinned to `deny` rather than relying on the old blanket behavior.

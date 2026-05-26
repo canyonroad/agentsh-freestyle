@@ -1,6 +1,6 @@
 # agentsh + Freestyle
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.3 with [Freestyle](https://freestyle.sh) VMs.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.20.2 with [Freestyle](https://freestyle.sh) VMs.
 
 ## Why agentsh + Freestyle?
 
@@ -52,11 +52,12 @@ agentsh adds the governance layer that controls what agents can do inside the VM
 
 ## Backend Status on Freestyle
 
-Verified on agentsh 0.18.3+5f9af81, Freestyle kernel 6.1.0-8-freestyle. Protection score: **65/100**.
+Verified on agentsh 0.20.2+67950cea, Freestyle kernel 6.1.0-11-freestyle. Protection score: **65/100**.
 
 | Layer | Backend | Status |
 |---|---|---|
-| Command control | seccomp-execve + session API | Enforced |
+| Command control | seccomp-execve + session API | Enforced (install-probe confirmed) |
+| Socket-family / CVE mitigation | seccomp socket rules + `dirtyfrag-conservative` set | Enforced |
 | Workspace files | FUSE per-session overlay | Enforced |
 | System path files | Landlock ABI v2 (per command via unixwrap) | Enforced |
 | Network policy | userspace proxy + Landlock | Enforced |
@@ -64,15 +65,22 @@ Verified on agentsh 0.18.3+5f9af81, Freestyle kernel 6.1.0-8-freestyle. Protecti
 | Resource limits (cgroups) | cgroups v2 top-level fallback | Partial -- process migration gap |
 | eBPF cgroup/connect hooks | cilium/ebpf CO-RE | Off -- kernel ships without BTF |
 | Landlock network ABI | Landlock ABI v4 | Off -- needs kernel 6.7+ |
-| Capability drop | systemd CapabilityBoundingSet (10 of 41 caps) | Enforced |
+| Capability drop | systemd CapabilityBoundingSet (10 of 41 caps) | Enforced (server process) |
 | PID namespace | unshare/clone | Off -- host namespace |
 | Systemd hardening | NoNewPrivileges, RestrictAddressFamilies, etc. | Enforced |
 
 The full test suite (`npm test`) runs **64 assertions across 14 categories** and lands at **64/64 passing** on a clean run. The red team simulation (`npm run demo:attack`) blocks **41 of 44 attacks (93%)**.
 
-### agentsh v0.18.3 Notes
+### agentsh v0.20.2 Notes
 
-This repo pins the Linux `.deb` release asset for agentsh `v0.18.3`. Compared with the original `v0.18.0` Freestyle port, this release tightens `agentsh wrap` session gating, restores file-monitor seccomp parity for the wrap path, and includes release/CI hardening for seccomp and packaging coverage. The Freestyle posture remains the same: eBPF stays disabled because the kernel lacks BTF, and cgroup PID/CPU/I/O limits remain a documented migration gap.
+This repo pins the Linux `.deb` release asset for agentsh `v0.20.2`. Highlights since the previous `v0.18.3` pin, and how they land on Freestyle:
+
+- **Honest detect + real seccomp install-probe** (#389/#392). `agentsh detect` now confirms seccomp by attempting an actual `SECCOMP_RET_USER_NOTIF` install rather than a read-only kernel probe. On Freestyle the install **succeeds** (`seccomp_user_notify ✓`, `Seccomp_filters: 13`), so `COMMAND CONTROL 25/25` via `seccomp-execve` is genuinely enforced — not an overstatement.
+- **Interception-aware opaque shell-c + `sandbox.seccomp.shellc.opaque` knob** (#381/#386). With execve interception active, an unparseable `bash -c`/`sh -c` script would, by default (`enforce`), run while every inner `execve` is policed. We pin **`opaque: deny`** so opaque scripts stay fail-closed (`shellc-opaque-script`, exit 126) — derivable simple commands and the session API are unaffected.
+- **Dirty Frag mitigation set** (#293). `sandbox.seccomp.mitigation_sets: [dirtyfrag-conservative]` blocks the Openwall Dirty Frag (2026-05-07) socket tuples — `AF_RXRPC` and `AF_NETLINK`/`NETLINK_XFRM` — via seccomp socket rules. This works on Freestyle's BTF-less kernel because it needs no eBPF.
+- **Socket-family blocking** (#261). Seccomp/ptrace-based default-on block list for 12 niche `AF_*` families that are recurring kernel attack entry points.
+
+The Freestyle posture is otherwise unchanged: eBPF stays disabled because the kernel lacks BTF (`/sys/kernel/btf/vmlinux` missing), Landlock is ABI v2 (network ABI v4 needs kernel 6.7+), and cgroup PID/CPU/I/O limits remain a documented process-migration gap. The kernel line has advanced to `6.1.0-11-freestyle`.
 
 ## Quick Start
 
@@ -131,7 +139,7 @@ vm.exec("sudo whoami")
 Two execution modes are exposed:
 
 - **`execDirect(command, args)`** -- sends the command directly to the session API. The server evaluates it against `command_rules` and returns `E_POLICY_DENIED` (exit 126) for blocked commands. **Use this for policy enforcement.**
-- **`exec(command)`** -- convenience helper for simple shell-like strings. Simple commands are parsed and sent through `execDirect()` so `command_rules` still apply. Commands requiring shell metacharacters fall back to `/bin/bash.real -c`, where agentsh v0.18.3 derives simple payloads for policy checks and fails closed on opaque scripts when restrictive command rules are present.
+- **`exec(command)`** -- convenience helper for simple shell-like strings. Simple commands are parsed and sent through `execDirect()` so `command_rules` still apply. Commands requiring shell metacharacters fall back to `/bin/bash.real -c`, where agentsh v0.20.x derives simple payloads for policy checks and fails closed on opaque scripts (`sandbox.seccomp.shellc.opaque: deny`) when restrictive command rules are present.
 
 The `demo:multi-context` demo shows direct commands, derived shell payloads, and opaque shell-script denial explicitly.
 
@@ -139,7 +147,7 @@ The `demo:multi-context` demo shows direct commands, derived shell payloads, and
 
 Security policy is defined in two files:
 
-- **`config.yaml`** -- Server configuration: HTTP/gRPC, sessions, [FUSE](https://www.agentsh.org/docs/#fuse) toggles, [seccomp](https://www.agentsh.org/docs/#seccomp), top-level [Landlock](https://www.agentsh.org/docs/#landlock) defence-in-depth, audit, DLP. `sandbox.network.ebpf.enabled: false` because Freestyle's kernel lacks BTF.
+- **`config.yaml`** -- Server configuration: HTTP/gRPC, sessions, [FUSE](https://www.agentsh.org/docs/#fuse) toggles, [seccomp](https://www.agentsh.org/docs/#seccomp) (including `shellc.opaque: deny` and the `dirtyfrag-conservative` mitigation set), top-level [Landlock](https://www.agentsh.org/docs/#landlock) defence-in-depth, audit, DLP. `sandbox.network.ebpf.enabled: false` because Freestyle's kernel lacks BTF.
 - **`default.yaml`** -- [Policy rules](https://www.agentsh.org/docs/#policy-reference) (~640 lines): [command rules](https://www.agentsh.org/docs/#command-rules), [network rules](https://www.agentsh.org/docs/#network-rules), [file rules](https://www.agentsh.org/docs/#file-rules), [environment policy](https://www.agentsh.org/docs/#environment-policy), resource limits.
 
 See the [agentsh documentation](https://www.agentsh.org/docs/) for the full policy reference.
