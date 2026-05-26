@@ -2,7 +2,7 @@
 # Restrict /dev/fuse to prevent any FUSE mount during snapshot
 /bin/chmod 600 /dev/fuse 2>/dev/null || true
 
-# Cgroups v2: v0.18.0 (canyonroad/agentsh#202 / #214) auto-detects the freestyle
+# Cgroups v2: agentsh v0.18.x (canyonroad/agentsh#202 / #214) auto-detects the freestyle
 # nested-cgroup limitation (#197 — empty subtree_control under
 # freestyle-supervisor.service) and falls back to a top-level
 # /sys/fs/cgroup/agentsh.slice. The slice is created and per-command

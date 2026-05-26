@@ -35,14 +35,25 @@ async function main() {
       }
     }
 
+    async function runShell(desc: string, script: string): Promise<void> {
+      const r = await agentsh.execDirect('/bin/bash.real', ['-c', script])
+      if (r.blocked) {
+        const rule = r.rule ? ` [${r.rule}]` : ''
+        console.log(`  \u2717 BLOCKED: ${desc}${rule}`)
+      } else if (r.exitCode !== 0) {
+        console.log(`  \u2717 DENIED: ${desc} (exit: ${r.exitCode})`)
+      } else {
+        console.log(`  \u26a0 ALLOWED: ${desc}`)
+      }
+    }
+
     console.log('='.repeat(60))
     console.log('MULTI-CONTEXT COMMAND EXECUTION DEMO')
     console.log('='.repeat(60))
     console.log()
-    console.log('This demo shows how command_rules are enforced at the')
-    console.log('session API boundary. Direct commands (execDirect) are')
-    console.log('evaluated against policy. Commands within a bash session')
-    console.log('run as sub-processes and rely on OS-level restrictions.')
+    console.log('This demo shows how command_rules are enforced across')
+    console.log('direct session API calls, derived bash -c payloads, and')
+    console.log('opaque shell scripts in agentsh v0.20.x (shellc.opaque: deny).')
 
     // Section 1: Direct API blocking (baseline)
     printSection('1. DIRECT API BLOCKING (baseline)')
@@ -54,28 +65,28 @@ async function main() {
 
     // Section 2: Same commands via bash shell
     printSection('2. SAME COMMANDS VIA BASH SHELL')
-    console.log('Commands wrapped in bash.real \u2014 API sees bash.real, not the sub-command.')
-    console.log('Sub-commands rely on OS restrictions (permissions, missing binaries):\n')
-    await run('sudo whoami', 'sudo whoami 2>&1')
-    await run('ssh localhost', 'ssh localhost 2>&1')
-    await run('kill -9 1', 'kill -9 1 2>&1')
+    console.log('Simple bash -c payloads are derived and checked against command_rules:\n')
+    await runShell('sudo whoami', 'sudo whoami')
+    await runShell('ssh localhost', 'ssh localhost')
+    await runShell('kill -9 1', 'kill -9 1')
 
     // Section 3: Via env, xargs, find -exec
     printSection('3. INDIRECT EXECUTION CONTEXTS')
     console.log('Commands launched via env, xargs, find -exec:\n')
-    await run('env sudo whoami', 'env sudo whoami 2>&1')
-    await run('echo whoami | xargs sudo', 'echo whoami | xargs sudo 2>&1')
-    await run('find -exec sudo whoami', 'find /tmp -maxdepth 0 -exec sudo whoami \\; 2>&1')
+    await runShell('env sudo whoami', 'env sudo whoami')
+    await runShell('echo whoami | xargs sudo (opaque)', 'echo whoami | xargs sudo')
+    await runDirect('find -exec sudo whoami', 'find', ['/tmp', '-maxdepth', '0', '-exec', 'sudo', 'whoami', ';'])
 
     // Section 4: Via nested script
     printSection('4. VIA NESTED SCRIPT')
-    await agentsh.exec('printf "#!/bin/sh\\nsudo whoami\\n" > /tmp/escalate.sh && chmod +x /tmp/escalate.sh')
-    await run('/tmp/escalate.sh (calls sudo)', '/tmp/escalate.sh 2>&1')
+    await agentsh.execDirect('python3', ['-c', "open('/tmp/escalate.sh','w').write('#!/bin/sh\\nsudo whoami\\n')"])
+    await agentsh.execDirect('chmod', ['+x', '/tmp/escalate.sh'])
+    await runDirect('/tmp/escalate.sh (calls sudo)', '/tmp/escalate.sh', [])
 
     // Section 5: Via Python subprocess
     printSection('5. VIA PYTHON subprocess')
-    await run('python3 subprocess.run sudo', 'python3 -c "import subprocess; subprocess.run([\'sudo\',\'whoami\'])" 2>&1')
-    await run('python3 os.system sudo', 'python3 -c "import os; os.system(\'sudo whoami\')" 2>&1')
+    await runDirect('python3 subprocess.run sudo', 'python3', ['-c', "import subprocess; subprocess.run(['sudo','whoami'])"])
+    await runDirect('python3 os.system sudo', 'python3', ['-c', "import os; os.system('sudo whoami')"])
 
     // Section 6: Allowed safe commands (non-over-blocking)
     async function runSafe(desc: string, cmd: string): Promise<void> {
@@ -93,9 +104,9 @@ async function main() {
     console.log('Safe commands via same indirect contexts should succeed:\n')
     await runSafe('env whoami', 'env whoami')
     await runSafe('env ls /home', 'env ls /home')
-    await runSafe('echo found | xargs echo', 'echo found | xargs echo')
-    await runSafe('find -exec echo found', 'find /tmp -maxdepth 0 -exec echo found \\;')
-    await runSafe('python3 subprocess echo', 'python3 -c "import subprocess; subprocess.run([\'echo\',\'allowed\'])" 2>&1')
+    await runShell('echo found | xargs echo (opaque)', 'echo found | xargs echo')
+    await runDirect('find -exec echo found', 'find', ['/tmp', '-maxdepth', '0', '-exec', 'echo', 'found', ';'])
+    await runDirect('python3 subprocess echo', 'python3', ['-c', "import subprocess; subprocess.run(['echo','allowed'])"])
 
     // Summary
     console.log('\n' + '='.repeat(60))
@@ -108,19 +119,16 @@ Command enforcement model:
     \u2717 sudo, ssh, kill, rm -rf  \u2192 command_rules evaluated, blocked
 
   WITHIN BASH (exec / indirect contexts):
-    Commands run as sub-processes inside bash.real.
-    The session API only evaluates the top-level command (bash.real).
-    Sub-command blocking relies on:
-      - Shell shim intercepts (when sub-process invokes /bin/bash)
-      - OS-level permissions (sudo needs sudoers, kill needs privileges)
-      - Missing binaries (ssh may not be installed)
+    Simple bash -c payloads are derived and checked against command_rules.
+    Opaque scripts with pipes, redirects, or command expansion fail closed
+    as shellc-opaque-script under restrictive command policies.
 
   SAFE COMMANDS:
-    \u2713 env, xargs, find -exec with safe commands \u2192 not over-blocked
+    \u2713 env, find -exec, python subprocess with safe commands \u2192 not over-blocked
 
-  For full sub-process enforcement across all contexts,
-  Landlock filesystem restrictions would prevent execution of
-  blocked binaries regardless of how they are invoked.
+  OPAQUE SCRIPTING:
+    \u2717 shell pipelines and redirects are intentionally blocked unless the
+      operator relaxes command policy to an allow-only command posture.
 `)
 
   } catch (error) {

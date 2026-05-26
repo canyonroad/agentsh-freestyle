@@ -6,7 +6,7 @@ A comprehensive security demo showcasing agentsh runtime governance within Frees
 
 **Value proposition:** Freestyle provides fast VM isolation (<700ms provisioning). agentsh adds policy-driven governance (command blocking, network filtering, file I/O interception, secret redaction, audit logging). Together they create defense-in-depth security for untrusted AI agent code.
 
-> **Status update (2026-04-11):** This document captured the original design (agentsh v0.16.9 + Freestyle kernel 6.1.0-6, no Landlock). The integration has since moved to **agentsh v0.18.0** on **kernel 6.1.0-7-freestyle** which now ships **Landlock**. See "v0.18.0 + Landlock Update (2026-04-11)" at the bottom of this document for the current state, and `README.md` for the user-facing summary.
+> **Status update (2026-05-25):** This document captured the original design (agentsh v0.16.9 + Freestyle kernel 6.1.0-6, no Landlock). The integration now pins **agentsh v0.20.2** on Freestyle kernels that ship **Landlock** (now `6.1.0-11-freestyle`). See "v0.18.x + Landlock Update" and the newer "v0.20.2 Update" at the bottom of this document for the current state, and `README.md` for the user-facing summary.
 
 ## Project Structure
 
@@ -168,12 +168,12 @@ Alternative approach for faster startup:
 | Network Blocking | 5 | npmjs allowed, metadata blocked, evil.com blocked, private networks blocked |
 | Environment Policy | 3 | Safe vars present (HOME/PATH), BASH_ENV or AGENTSH vars set |
 | File I/O | 4 | Workspace writes allowed, /tmp writes allowed, Python workspace writes, /etc writes (Landlock gap documented) |
-| Multi-context (documents bypass) | 4 | sudo/env-sudo inside bash.real succeed on root VM — documents the sub-command bypass model |
+| Multi-context (shell derivation) | 4 | sudo/env-sudo inside bash.real are derived and blocked; opaque shell scripts fail closed |
 | FUSE Workspace & Soft Delete | 4 | File creation, soft-delete, file gone from original, quarantine directory |
 | Credential Path | 3 | ~/.ssh, ~/.aws read fails; /proc/1/environ readable (Landlock gap documented) |
 | Audit | 2 | SQLite db exists, command events recorded |
 
-**Current stability:** runs land at 58–60 passing out of 64. The 4–6 remaining failures are pre-existing session-API timing flakes — different tests fail each run (`agentsh installed`, `server healthy`, `policy file exists`, FUSE soft-delete sequence, occasional `INTERNAL_ERROR`). Not correlated with the 2026-04-08 config/startup changes; the commit `275dfd0` "58/58 passing" claim was a single lucky run. The six new kernel-capability tests pass consistently (6/6 across three runs).
+**Current stability:** as of the v0.18.3 update, `npm test` is expected to land at 64/64 passing. The helper uses a single retry for transient empty session API responses, policy-test calls pass the active session id for workspace-expanded rules, and shell-metacharacter cases are tested as explicit `shellc-opaque-script` denials.
 
 ## Demo Files
 
@@ -326,25 +326,26 @@ Verified on kernel `6.1.0-6-freestyle`:
 
 Future investigations into "is it the kernel or is it agentsh?" should start with these scripts before filing further upstream bugs.
 
-## v0.18.0 + Landlock Update (2026-04-11)
+## v0.18.x + Landlock Update (2026-04-27)
 
-This section supersedes the 2026-04-08 "Kernel Reality vs agentsh Detect" section above. The integration has moved from agentsh v0.16.9 → **v0.18.0** and the Freestyle kernel has gone from `6.1.0-6` (no Landlock) → **`6.1.0-7-freestyle`** (LSMs: `capability,selinux,landlock`). Multiple upstream bugs the previous workarounds existed to paper over have shipped fixes.
+This section supersedes the 2026-04-08 "Kernel Reality vs agentsh Detect" section above. The integration has moved from agentsh v0.16.9 to **v0.18.3**, and the Freestyle kernel line has moved from `6.1.0-6` (no Landlock) to kernels that include **Landlock** (LSMs: `capability,selinux,landlock`). Multiple upstream bugs the previous workarounds existed to paper over have shipped fixes.
 
-### What changed in v0.18.0 (vs v0.16.9)
+### What changed in v0.18.x (vs v0.16.9)
 
-| Area | v0.16.9 (old) | v0.18.0 (now) |
+| Area | v0.16.9 (old) | v0.18.x (now) |
 |---|---|---|
 | **Landlock** | Not in Freestyle kernel — `file_rules` for system paths were a no-op | Kernel 6.1+ ships Landlock; agentsh applies an auto-derived ruleset per command via `agentsh-unixwrap`. Writes to `/etc`, reads of `/proc/1/environ`, overwrites of `/usr/bin` are now blocked at the kernel. |
-| **eBPF detect (#196)** | Reported "permission denied" on a kernel that actually had CAP_BPF — false negative | Detect logic fixed (#199). The eBPF backend is **still off** on Freestyle, but for a different reason: kernel ships **without BTF** (`/sys/kernel/btf/vmlinux` missing), so cilium/ebpf CO-RE programs cannot load. v0.18.0's stricter capability check refuses to start if `sandbox.network.ebpf.enabled: true` is set in this state. |
+| **eBPF detect (#196)** | Reported "permission denied" on a kernel that actually had CAP_BPF — false negative | Detect logic fixed (#199). The eBPF backend is **still off** on Freestyle, but for a different reason: kernel ships **without BTF** (`/sys/kernel/btf/vmlinux` missing), so cilium/ebpf CO-RE programs cannot load. v0.18.x's stricter capability check refuses to start if `sandbox.network.ebpf.enabled: true` is set in this state. |
 | **Cgroup nested-mode (#197)** | Memory/PID/CPU caps silently no-op'd because `freestyle-supervisor.service` slice has empty `subtree_control`. Worked around by setting `sandbox.cgroups.base_path: /sys/fs/cgroup/agentsh` in `config.yaml` and pre-creating that tree from `agentsh-startup.sh`. | `ProbeCgroupsV2` (#202/#214) auto-detects the empty nested cgroup and falls back to a top-level `/sys/fs/cgroup/agentsh.slice`. The slice is created and per-command sub-cgroups appear automatically — **no manual `base_path` and no startup-script tree creation anymore**. (See "Resource limit gap" below for the remaining issue.) |
-| **Capability-drop scoring (#198)** | Reported `15/15 capability-drop ✓` while `CapEff = 0x1ffffffffff` (all caps set) — cosmetic but misleading | Honest reporting in v0.18.0 (#200). Score dropped from a fictitious ~80/100 to a real ~65/100, but actual containment is **better** because Landlock now enforces system paths. The lower number is more truthful, not a regression. |
+| **Capability-drop scoring (#198)** | Reported `15/15 capability-drop ✓` while `CapEff = 0x1ffffffffff` (all caps set) — cosmetic but misleading | Honest reporting landed in v0.18.0 (#200). Score dropped from a fictitious ~80/100 to a real ~65/100, but actual containment is **better** because Landlock now enforces system paths. The lower number is more truthful, not a regression. |
 | **Landlock derivation (#209)** | N/A (Landlock not available) | Wildcard ops + `MAKE_SOCK` fixed in v0.18.0, so policy `file_rules` with `operations: ["*"]` correctly feed paths into the auto-derived Landlock ruleset. |
+| **Wrap session/file monitor parity (#238/#239)** | N/A | v0.18.3 tightens strong-mode `AGENTSH_IN_SESSION` gating and restores file-monitor seccomp fields in `agentsh wrap`. This repo primarily uses the session API plus shell shim, but the pinned release now includes those wrap-path hardening fixes. |
 
 ### Current config posture
 
 - `config.yaml` has a top-level `landlock:` block with allow/deny paths as defence-in-depth alongside the per-command unixwrap ruleset.
 - `sandbox.network.ebpf.enabled: false` — Freestyle kernel lacks BTF.
-- `sandbox.cgroups` has no manual `base_path` — v0.18.0 auto-falls-back to `/sys/fs/cgroup/agentsh.slice`.
+- `sandbox.cgroups` has no manual `base_path` — v0.18.x auto-falls-back to `/sys/fs/cgroup/agentsh.slice`.
 - `agentsh-startup.sh` is back to a simple form: chmod `/dev/fuse`, start the server, install the shim, keep the service alive. No manual cgroup tree creation or PID re-parenting (the kernel rejects it).
 
 ### What's actually enforced now
@@ -363,21 +364,45 @@ This section supersedes the 2026-04-08 "Kernel Reality vs agentsh Detect" sectio
 
 ### Remaining gaps
 
-1. **Resource-limit cgroup migration gap.** v0.18.0 creates `/sys/fs/cgroup/agentsh.slice` and per-command sub-cgroups, but processes spawned via `vm.exec` end up under `/system.slice/freestyle-supervisor.service` rather than the per-command cgroup. agentsh writes the cgroup but never migrates the spawned PID into it. A workaround that re-parents from `agentsh-startup.sh` is rejected by the kernel — once `subtree_control` has controllers, the cgroup can't have processes directly ("no internal process constraint" → I/O error on `cgroup.procs` write). Net effect: `pids_max=100`, `cpu.max=50%`, `io.max=25MB/s` from `default.yaml` are silently no-ops on Freestyle. Memory and command-timeout still trip via systemd/agentsh server-side enforcement.
+1. **Resource-limit cgroup migration gap.** v0.18.x creates `/sys/fs/cgroup/agentsh.slice` and per-command sub-cgroups, but processes spawned via `vm.exec` end up under `/system.slice/freestyle-supervisor.service` rather than the per-command cgroup. agentsh writes the cgroup but never migrates the spawned PID into it. A workaround that re-parents from `agentsh-startup.sh` is rejected by the kernel — once `subtree_control` has controllers, the cgroup can't have processes directly ("no internal process constraint" → I/O error on `cgroup.procs` write). Net effect: `pids_max=100`, `cpu.max=50%`, `io.max=25MB/s` from `default.yaml` are silently no-ops on Freestyle. Memory and command-timeout still trip via systemd/agentsh server-side enforcement.
 2. **eBPF blocked by missing BTF.** As above. Filed as a Freestyle kernel-build follow-up — enabling `CONFIG_DEBUG_INFO_BTF=y` would let cilium/ebpf CO-RE programs load.
-3. **Landlock derivation is base-directory granular.** `extractBaseDir` collapses each policy `file_rules` path at the first glob char, so `/etc/passwd`, `/etc/hosts`, `/etc/resolv.conf` all roll up into a single `/etc` allow. Landlock has no carve-out semantics inside an allowed parent, so `/etc/shadow` (in `deny_paths`) is still readable. The same coarseness lets `sudo` execute when invoked via `bash.real -c "sudo whoami"` (binary at `/usr/bin/sudo`, inherits the `/usr/bin` execute allow that `git`, `python3`, etc. need).
-4. **`bash.real` sub-command bypass of `command_rules`.** The session API only evaluates the top-level command. `agentsh.exec("sudo whoami")` runs through `bash.real -c "sudo whoami"`, so the policy sees `bash.real` not `sudo`. Use `agentsh.execDirect('sudo', ['whoami'])` for command-policy enforcement testing. Unchanged from the design — documented in `demo:multi-context`.
+3. **Landlock derivation is base-directory granular.** `extractBaseDir` collapses each policy `file_rules` path at the first glob char, so `/etc/passwd`, `/etc/hosts`, `/etc/resolv.conf` all roll up into a single `/etc` allow. Landlock has no carve-out semantics inside an allowed parent, so `/etc/shadow` (in `deny_paths`) can still be readable if a process reaches that path through an allowed base directory.
+4. **Opaque shell scripts now fail closed.** agentsh v0.18.3 derives simple `<shell> -c` payloads before command-policy evaluation, so `bash.real -c "sudo whoami"` is blocked by `block-shell-escape`. Scripts with metacharacters, pipes, redirects, globs, or expansions are denied as `shellc-opaque-script` when restrictive command rules are present. The `exec()` helper now sends simple commands directly and only falls back to shell execution for commands that need it.
 
-### Test results on v0.18.0
+### Test results on v0.18.3
 
 - `npm test`: **64/64 passing** on a clean run. The retry wrapper added to `sessionExec` (single retry on transient empty-stdout from curl-over-localhost) absorbs the flakes that previously held the suite at 58–60 passing. The "PID limit ... NOT enforced" test passes by intentionally accepting the cgroup migration gap; if/when agentsh starts migrating processes into per-command cgroups, that test should be tightened to actually check `forked < 150`.
 - `npm run demo:attack`: **41/44 blocked (93%)** (was 36/44 / 82% on v0.16.9). Phase 6 (Persistence) went from 2/5 → 5/5 once Landlock landed. The 3 that still get through are all in Phase 1 recon (`/etc/passwd`, `/etc/shadow`, env dump) — direct consequence of Landlock base-dir derivation, not a bug to fix in this repo.
 
 ### Updated upstream issue history
 
-| Issue | What it was | Status in v0.18.0 |
+| Issue | What it was | Status in v0.18.x |
 |---|---|---|
 | **canyonroad/agentsh#196** | `agentsh detect` reported `ebpf - permission denied` on a kernel where CAP_BPF was present and raw `bpf(BPF_PROG_LOAD, ...)` worked | Detect logic fixed in #199. eBPF backend is **still** off on Freestyle for a different reason: kernel ships without BTF. Filed as a Freestyle kernel-build follow-up. |
-| **canyonroad/agentsh#197** | Resource limits silently no-op'd because agentsh placed per-command cgroups under a parent (`freestyle-supervisor.service`) whose `subtree_control` was empty | `ProbeCgroupsV2` auto-fallback added in #202/#214. Slice is created correctly, but spawned processes are not migrated into the per-command cgroup, so PID/CPU/disk-IO caps still no-op. Memory and timeout still trip via systemd/server-side path. Tracked as a v0.18.0 follow-up. |
+| **canyonroad/agentsh#197** | Resource limits silently no-op'd because agentsh placed per-command cgroups under a parent (`freestyle-supervisor.service`) whose `subtree_control` was empty | `ProbeCgroupsV2` auto-fallback added in #202/#214. Slice is created correctly, but spawned processes are not migrated into the per-command cgroup, so PID/CPU/disk-IO caps still no-op. Memory and timeout still trip via systemd/server-side path. Tracked as a v0.18.x follow-up. |
 | **canyonroad/agentsh#198** | Capability-drop scored 15/15 while `CapEff` was `0x1ffffffffff` (all caps) — cosmetic | Fixed (#200). Score is honest now. The total going from "80/100" to "65/100" reflects truth-in-reporting, not regression. |
 | **canyonroad/agentsh#209** | Auto-derived Landlock ruleset dropped rules with `operations: ["*"]` and didn't include `MAKE_SOCK` | Fixed in v0.18.0. Wildcard ops are honored; the `socket(AF_UNIX)` test for unix-socket interception now works. |
+
+## v0.20.2 Update (2026-05-25)
+
+The pin moved from **v0.18.3** to **v0.20.2** (`0.20.2+67950cea`); the Freestyle kernel line advanced to **`6.1.0-11-freestyle`**. The protection score is unchanged at **65/100** and the test results are unchanged (`npm test` 64/64, `npm run demo:attack` 41/44 / 93%), but two things are materially better and one config knob is now pinned.
+
+### What changed in v0.20.x (vs v0.18.3)
+
+| Area | v0.18.3 (old) | v0.20.2 (now) |
+|---|---|---|
+| **Detect honesty (#389/#392)** | `seccomp-execve` reported available from a read-only kernel probe | `agentsh detect` now runs a real `SECCOMP_RET_USER_NOTIF` install-probe before claiming the backend. On Freestyle the install **succeeds** (`seccomp_user_notify ✓`, server proc `Seccomp_filters: 13`), so `COMMAND CONTROL 25/25` via `seccomp-execve` is verified, not assumed. Hosts where the listener can't install (Daytona/`EBUSY`) now honestly drop to `landlock` mode — Freestyle is not one of them. |
+| **Opaque shell-c (#381/#386)** | Opaque `bash -c`/`sh -c` was blanket pre-denied as `shellc-opaque-script` | Default is now `enforce`: with execve interception active the script runs and every inner `execve` is policed. New `sandbox.seccomp.shellc.opaque` knob (`deny`/`enforce`/`allow`). We pin **`deny`** to keep the fail-closed posture and the `shellc-opaque-script` semantics the test suite asserts. |
+| **Dirty Frag mitigation (#293)** | N/A | `sandbox.seccomp.mitigation_sets: [dirtyfrag-conservative]` blocks the Openwall Dirty Frag (2026-05-07) socket tuples (`AF_RXRPC`, `AF_NETLINK`/`NETLINK_XFRM`) via seccomp socket rules — no eBPF needed, so it works on the BTF-less kernel. `hardening_profiles` was removed upstream in favor of mitigation sets. |
+| **Socket-family blocking (#261)** | N/A | Default-on seccomp/ptrace block list for 12 niche `AF_*` families that are recurring kernel attack entry points. |
+| **Shim kernel-install (#274, 0.19.1+)** | Shim routed via session API only | The shell shim now attempts a kernel-layer seccomp install on invocation. The session-API path the tests use is unaffected; a raw-shell `vm.exec` may occasionally hit a cold-start install race that fails closed (`shim_install` fall-through). |
+
+### Config posture delta
+
+- **Added** `sandbox.seccomp.shellc.opaque: deny` — fail-closed on opaque shell scripts now that interception is active (otherwise the v0.20.x default `enforce` would run them under per-exec policing).
+- **Added** `sandbox.seccomp.mitigation_sets: [dirtyfrag-conservative]` + `sandbox.seccomp.mitigation_dirs: [/etc/agentsh/mitigations]` (the dir is created empty by the install script; only the built-in set is used).
+- Everything else is unchanged: eBPF off (no BTF), Landlock ABI v2, cgroup top-level fallback with the documented process-migration gap, systemd hardening drop-in (10 of 41 caps).
+
+### Remaining gaps (unchanged)
+
+The four gaps from the v0.18.x section still hold: cgroup process-migration, eBPF blocked by missing BTF, base-directory-granular Landlock derivation (the 3 `demo:attack` passes in Phase 1 recon), and opaque-shell handling — now explicitly pinned to `deny` rather than relying on the old blanket behavior.

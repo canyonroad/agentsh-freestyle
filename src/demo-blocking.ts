@@ -134,7 +134,7 @@ async function main() {
     console.log('SUMMARY')
     console.log('='.repeat(60))
     console.log(`
-agentsh v0.18.0 policy enforcement on Freestyle VM:
+agentsh v0.20.2 policy enforcement on Freestyle VM:
 
 COMMAND BLOCKING (via session API command_rules):
   \u2717 sudo, su, chroot    \u2192 block-shell-escape
@@ -150,7 +150,7 @@ FILESYSTEM (via FUSE workspace overlay + Landlock):
   \u2713 /proc/1/environ      \u2192 denied by Landlock
   \u2713 ~/.ssh, ~/.aws       \u2192 denied (paths absent + Landlock)
 
-KERNEL CAPABILITIES (kernel 6.1.0-8-freestyle):
+KERNEL CAPABILITIES (kernel 6.1.0-11-freestyle):
   \u2713 seccomp-execve       \u2192 command interception
   \u2713 FUSE                 \u2192 workspace file interception
   \u2713 Landlock (ABI v2)    \u2192 system path filesystem policy (NEW since v0.16.x)

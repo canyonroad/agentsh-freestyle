@@ -56,7 +56,7 @@ sandbox:
     intercept_mode: "all"
     proxy_listen_addr: "127.0.0.1:0"
     # eBPF cgroup/connect hooks. The 4-layer detect bug (#196) was fixed
-    # in v0.18.0 / #199, BUT the Freestyle kernel ships WITHOUT BTF
+    # in v0.18.x / #199, BUT the Freestyle kernel ships WITHOUT BTF
     # (/sys/kernel/btf/vmlinux is missing), so cilium/ebpf can't relocate
     # types and the CO-RE programs fail to load. Until Freestyle ships a
     # kernel with CONFIG_DEBUG_INFO_BTF=y, network enforcement runs via
@@ -68,18 +68,45 @@ sandbox:
 
   # Cgroups v2 — Freestyle places agentsh under
   # /system.slice/freestyle-supervisor.service/, whose subtree_control is
-  # empty (canyonroad/agentsh#197). v0.18.0 ships #202 / #214: ProbeCgroupsV2
+  # empty (canyonroad/agentsh#197). v0.18.x ships #202 / #214: ProbeCgroupsV2
   # auto-falls back to a top-level /sys/fs/cgroup/agentsh.slice when the
   # nested cgroup has no delegated controllers. Leaving base_path unset so
   # the probe picks the right mode automatically — no manual workaround.
   cgroups:
     enabled: true
 
-  # Seccomp - per-command wrapper via agentsh-unixwrap (inherently deferred)
+  # Seccomp - per-command wrapper via agentsh-unixwrap (inherently deferred).
+  # Confirmed installable on Freestyle: `agentsh detect` runs a real
+  # SECCOMP_RET_USER_NOTIF install probe (v0.20.x #389) and reports
+  # seccomp_user_notify ✓ with COMMAND CONTROL 25/25 via seccomp-execve, so
+  # execve interception is genuinely active here (unlike Daytona/EBUSY hosts).
   seccomp:
     enabled: true
     file_monitor:
       enabled: false  # Requires Yama (not in kernel) for ProcessVMReadv; conflicts with FUSE when enabled
+
+    # Opaque `bash -c`/`sh -c` handling (agentsh v0.20.x #381/#386):
+    #   deny    — hard-deny any unparseable shell-c script (fail-closed)
+    #   enforce — run it but police every inner execve via seccomp (default)
+    #   allow   — run without a pre-deny even when interception is off
+    # We pin `deny` to keep the fail-closed posture: an agent that needs to
+    # run something goes through the session API / derivable simple commands;
+    # truly opaque scripts (pipes, redirects, multi-statement) are refused as
+    # `shellc-opaque-script`. Without this, the v0.20.x default (`enforce`)
+    # would run opaque scripts under per-exec policing instead of denying them.
+    shellc:
+      opaque: deny
+
+    # Dirty Frag (Openwall advisory 2026-05-07) socket-tuple mitigation
+    # (agentsh v0.19.3 #293). Seccomp-enforced — works on Freestyle's
+    # BTF-less kernel without eBPF. Blocks AF_RXRPC and AF_NETLINK/NETLINK_XFRM
+    # (log_and_kill) without blanket-disabling AF_NETLINK that other tooling
+    # legitimately uses. Built-in set is embedded in agentsh; mitigation_dirs
+    # is listed for operator-supplied sets but is optional.
+    mitigation_sets:
+      - dirtyfrag-conservative
+    mitigation_dirs:
+      - /etc/agentsh/mitigations
 
   # Unix socket wrapper - seccomp-based unix socket interception
   unix_sockets:
@@ -100,7 +127,7 @@ security:
 # ruleset before exec'ing each wrapped command. The ruleset is auto-derived
 # from the active policy's `file_rules` allow entries (see
 # canyonroad/agentsh#209 — wildcard-op derivation + MAKE_SOCK was fixed in
-# v0.18.0, so `operations: ["*"]` rules now feed paths into the ruleset).
+# v0.18.x, so `operations: ["*"]` rules now feed paths into the ruleset).
 #
 # We also list explicit allow/deny paths below as defence-in-depth — the
 # derived set covers our policy's allow rules but the extras here pin down

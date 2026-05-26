@@ -18,7 +18,7 @@ async function main() {
     console.log('DEMONSTRATING AGENTSH RESOURCE LIMITS')
     console.log('='.repeat(60))
     console.log()
-    console.log('agentsh v0.18.0 (canyonroad/agentsh#202/#214) auto-detects the')
+    console.log('agentsh v0.18.x (canyonroad/agentsh#202/#214) auto-detects the')
     console.log('Freestyle nested-cgroup limitation (#197 — empty subtree_control')
     console.log('under freestyle-supervisor.service) and falls back to a')
     console.log('top-level /sys/fs/cgroup/agentsh.slice. The slice IS created')
@@ -284,7 +284,7 @@ print(f'Wrote {mb} MB in {elapsed:.1f}s ({mb/elapsed:.1f} MB/s)')
     console.log(`
 Notes:
   - Resource limits are configured in default.yaml (policy)
-  - On Freestyle's nested cgroup setup (kernel 6.1.0-7), agentsh v0.18.0 falls
+  - On Freestyle's nested cgroup setup (kernel 6.1.x), agentsh v0.18.x falls
     back to a top-level /sys/fs/cgroup/agentsh.slice (auto-detected at startup).
   - The slice and per-command sub-cgroups exist, but spawned processes end up
     in /system.slice/freestyle-supervisor.service (where vm.exec children live)
@@ -294,7 +294,7 @@ Notes:
   - Net result: PID/CPU/Disk I/O caps are NOT enforced on Freestyle today.
     Memory limit and command timeout still trip via systemd / agentsh server
     side enforcement.
-  - Tracking the cgroup migration gap as a v0.18.0 follow-up.
+  - Tracking the cgroup migration gap as an agentsh v0.18.x follow-up.
 `)
 
   } catch (error) {
