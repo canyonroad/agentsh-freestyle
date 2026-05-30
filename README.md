@@ -1,6 +1,6 @@
 # agentsh + Freestyle
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.20.2 with [Freestyle](https://freestyle.sh) VMs.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.20.3 with [Freestyle](https://freestyle.sh) VMs.
 
 ## Why agentsh + Freestyle?
 
@@ -52,7 +52,7 @@ agentsh adds the governance layer that controls what agents can do inside the VM
 
 ## Backend Status on Freestyle
 
-Verified on agentsh 0.20.2+67950cea, Freestyle kernel 6.1.0-11-freestyle. Protection score: **65/100**.
+Verified on agentsh 0.20.3+be96a4d2, Freestyle kernel 6.1.0-15-freestyle. Protection score: **65/100**.
 
 | Layer | Backend | Status |
 |---|---|---|
@@ -71,16 +71,16 @@ Verified on agentsh 0.20.2+67950cea, Freestyle kernel 6.1.0-11-freestyle. Protec
 
 The full test suite (`npm test`) runs **64 assertions across 14 categories** and lands at **64/64 passing** on a clean run. The red team simulation (`npm run demo:attack`) blocks **41 of 44 attacks (93%)**.
 
-### agentsh v0.20.2 Notes
+### agentsh v0.20.3 Notes
 
-This repo pins the Linux `.deb` release asset for agentsh `v0.20.2`. Highlights since the previous `v0.18.3` pin, and how they land on Freestyle:
+This repo pins the Linux `.deb` release asset for agentsh `v0.20.3` — a patch bump over `v0.20.2` on the same `v0.20.x` line, verified with identical results (`npm test` 64/64, `npm run demo:attack` 41/44). The `v0.20.x` highlights below carry over unchanged; how they land on Freestyle:
 
 - **Honest detect + real seccomp install-probe** (#389/#392). `agentsh detect` now confirms seccomp by attempting an actual `SECCOMP_RET_USER_NOTIF` install rather than a read-only kernel probe. On Freestyle the install **succeeds** (`seccomp_user_notify ✓`, `Seccomp_filters: 13`), so `COMMAND CONTROL 25/25` via `seccomp-execve` is genuinely enforced — not an overstatement.
 - **Interception-aware opaque shell-c + `sandbox.seccomp.shellc.opaque` knob** (#381/#386). With execve interception active, an unparseable `bash -c`/`sh -c` script would, by default (`enforce`), run while every inner `execve` is policed. We pin **`opaque: deny`** so opaque scripts stay fail-closed (`shellc-opaque-script`, exit 126) — derivable simple commands and the session API are unaffected.
 - **Dirty Frag mitigation set** (#293). `sandbox.seccomp.mitigation_sets: [dirtyfrag-conservative]` blocks the Openwall Dirty Frag (2026-05-07) socket tuples — `AF_RXRPC` and `AF_NETLINK`/`NETLINK_XFRM` — via seccomp socket rules. This works on Freestyle's BTF-less kernel because it needs no eBPF.
 - **Socket-family blocking** (#261). Seccomp/ptrace-based default-on block list for 12 niche `AF_*` families that are recurring kernel attack entry points.
 
-The Freestyle posture is otherwise unchanged: eBPF stays disabled because the kernel lacks BTF (`/sys/kernel/btf/vmlinux` missing), Landlock is ABI v2 (network ABI v4 needs kernel 6.7+), and cgroup PID/CPU/I/O limits remain a documented process-migration gap. The kernel line has advanced to `6.1.0-11-freestyle`.
+The Freestyle posture is otherwise unchanged: eBPF stays disabled because the kernel lacks BTF (`/sys/kernel/btf/vmlinux` missing), Landlock is ABI v2 (network ABI v4 needs kernel 6.7+), and cgroup PID/CPU/I/O limits remain a documented process-migration gap. The kernel line has advanced to `6.1.0-15-freestyle`.
 
 ## Quick Start
 

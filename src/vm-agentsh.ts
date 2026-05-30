@@ -2,7 +2,7 @@ import { VmWith, VmWithInstance, VmSpec } from 'freestyle-sandboxes'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
-const AGENTSH_VERSION = 'v0.20.2'
+const AGENTSH_VERSION = 'v0.20.3'
 const AGENTSH_REPO = 'canyonroad/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const HEALTH_URL = `${AGENTSH_API}/health`
@@ -203,7 +203,7 @@ export class VmAgentsh extends VmWith<VmAgentshInstance> {
           content: [
             '#!/bin/bash',
             'set -eux',
-            '# cache-bust: 2026-05-25-v0.20.2',
+            '# cache-bust: 2026-05-29-v0.20.3',
             `curl -fsSL -L "${url}" -o /tmp/agentsh.deb`,
             'dpkg -i /tmp/agentsh.deb',
             'rm -f /tmp/agentsh.deb',
