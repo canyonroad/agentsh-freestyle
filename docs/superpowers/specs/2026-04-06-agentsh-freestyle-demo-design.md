@@ -6,7 +6,7 @@ A comprehensive security demo showcasing agentsh runtime governance within Frees
 
 **Value proposition:** Freestyle provides fast VM isolation (<700ms provisioning). agentsh adds policy-driven governance (command blocking, network filtering, file I/O interception, secret redaction, audit logging). Together they create defense-in-depth security for untrusted AI agent code.
 
-> **Status update (2026-05-25):** This document captured the original design (agentsh v0.16.9 + Freestyle kernel 6.1.0-6, no Landlock). The integration now pins **agentsh v0.20.2** on Freestyle kernels that ship **Landlock** (now `6.1.0-11-freestyle`). See "v0.18.x + Landlock Update" and the newer "v0.20.2 Update" at the bottom of this document for the current state, and `README.md` for the user-facing summary.
+> **Status update (2026-05-29):** This document captured the original design (agentsh v0.16.9 + Freestyle kernel 6.1.0-6, no Landlock). The integration now pins **agentsh v0.20.3** on Freestyle kernels that ship **Landlock** (now `6.1.0-15-freestyle`). See "v0.18.x + Landlock Update" and the newer "v0.20.2 Update" / "v0.20.3 Update" at the bottom of this document for the current state, and `README.md` for the user-facing summary.
 
 ## Project Structure
 
@@ -406,3 +406,7 @@ The pin moved from **v0.18.3** to **v0.20.2** (`0.20.2+67950cea`); the Freestyle
 ### Remaining gaps (unchanged)
 
 The four gaps from the v0.18.x section still hold: cgroup process-migration, eBPF blocked by missing BTF, base-directory-granular Landlock derivation (the 3 `demo:attack` passes in Phase 1 recon), and opaque-shell handling — now explicitly pinned to `deny` rather than relying on the old blanket behavior.
+
+## v0.20.3 Update (2026-05-29)
+
+The pin moved from **v0.20.2** to **v0.20.3** (`0.20.3+be96a4d2`) — a patch bump on the same `v0.20.x` line. The Freestyle kernel line advanced to **`6.1.0-15-freestyle`**. Re-verified on a fresh VM: `npm test` **64/64**, `npm run demo:attack` **41/44 (93%)**, protection score **65/100** — all unchanged. No config or posture changes were required; the v0.20.x feature set, config knobs (`shellc.opaque: deny`, `mitigation_sets: [dirtyfrag-conservative]`), and the four remaining gaps documented above all carry over unchanged.
